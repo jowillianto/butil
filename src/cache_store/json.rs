@@ -1,7 +1,7 @@
 use super::error::Error;
 use super::prelude::{FromCache, ToCache};
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct JsonTF<T: serde::Serialize + for<'de> serde::Deserialize<'de>> {
     marker: std::marker::PhantomData<T>,
 }

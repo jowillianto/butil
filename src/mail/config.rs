@@ -1,5 +1,6 @@
 use crate::error::ConfigError;
 use crate::prelude::AsyncToService;
+use std::future::Future;
 
 use super::queue::Queue;
 
@@ -26,32 +27,35 @@ pub enum Config {
     },
 }
 
-#[async_trait::async_trait]
 impl AsyncToService for Config {
     type Service = Queue;
 
-    async fn to_service(&self) -> Result<Self::Service, ConfigError> {
-        match self {
-            #[cfg(feature = "mail-smtp")]
-            Config::Smtp {
-                url,
-                username,
-                password,
-                queue_size,
-            } => {
-                let tp = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::from_url(url)
-                    .map_err(|e| crate::config_error!("mail::Config", "smtp-url: {}", e))?
-                    .credentials(lettre::transport::smtp::authentication::Credentials::new(
-                        username.clone(),
-                        password.clone(),
-                    ))
-                    .build();
-                Ok(Queue::new(tp, *queue_size, |_| async {}))
-            }
-            #[cfg(feature = "mail-file")]
-            Config::File { dir, queue_size } => {
-                let tp = lettre::AsyncFileTransport::<lettre::Tokio1Executor>::new(dir);
-                Ok(Queue::new(tp, *queue_size, |_| async {}))
+    fn to_service(
+        &self,
+    ) -> impl Future<Output = Result<Self::Service, ConfigError>> {
+        async move {
+            match self {
+                #[cfg(feature = "mail-smtp")]
+                Config::Smtp {
+                    url,
+                    username,
+                    password,
+                    queue_size,
+                } => {
+                    let tp = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::from_url(url)
+                        .map_err(|e| crate::config_error!("mail::Config", "smtp-url: {}", e))?
+                        .credentials(lettre::transport::smtp::authentication::Credentials::new(
+                            username.clone(),
+                            password.clone(),
+                        ))
+                        .build();
+                    Ok(Queue::new(tp, *queue_size, |_| async {}))
+                }
+                #[cfg(feature = "mail-file")]
+                Config::File { dir, queue_size } => {
+                    let tp = lettre::AsyncFileTransport::<lettre::Tokio1Executor>::new(dir);
+                    Ok(Queue::new(tp, *queue_size, |_| async {}))
+                }
             }
         }
     }

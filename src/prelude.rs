@@ -5,16 +5,14 @@ pub trait ToService {
     fn to_service(&self) -> Result<Self::Service, ConfigError>;
 }
 
-#[async_trait::async_trait]
 pub trait AsyncToService {
     type Service;
-    async fn to_service(&self) -> Result<Self::Service, ConfigError>;
+    fn to_service(&self) -> impl Future<Output = Result<Self::Service, ConfigError>>;
 }
 
-#[async_trait::async_trait]
 impl<T: ToService + Send + Sync> AsyncToService for T {
     type Service = <T as ToService>::Service;
-    async fn to_service(&self) -> Result<Self::Service, ConfigError> {
-        ToService::to_service(self)
+    fn to_service(&self) -> impl Future<Output = Result<Self::Service, ConfigError>> {
+        async { ToService::to_service(self) }
     }
 }

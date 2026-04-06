@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::DeriveInput;
 use syn::parse_macro_input;
 use syn::spanned::Spanned;
-use syn::DeriveInput;
 
 #[proc_macro_derive(AsyncToService)]
 pub fn derive_async_to_service(input: TokenStream) -> TokenStream {
@@ -84,17 +84,18 @@ pub fn derive_async_to_service(input: TokenStream) -> TokenStream {
             #(#service_fields),*
         }
 
-        #[::butil::async_trait::async_trait]
         impl ::butil::prelude::AsyncToService for #name {
             type Service = Service;
 
-            async fn to_service(
+            fn to_service(
                 &self,
-            ) -> ::core::result::Result<Self::Service, ::butil::error::ConfigError> {
-                #(#convert_fields)*
-                ::core::result::Result::Ok(Service {
-                    #(#init_fields),*
-                })
+            ) -> impl ::std::future::Future<Output = ::core::result::Result<Self::Service, ::butil::error::ConfigError>> {
+                async move {
+                    #(#convert_fields)*
+                    ::core::result::Result::Ok(Service {
+                        #(#init_fields),*
+                    })
+                }
             }
         }
     }

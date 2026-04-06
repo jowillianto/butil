@@ -19,3 +19,24 @@ pub trait FromCache {
     type Cache;
     fn from_cache(&self, v: &Self::Cache) -> Result<Self::Native, Error>;
 }
+
+pub trait IsExpired: Sized {
+    fn is_expired(&self) -> bool;
+    fn error_if_expire(self) -> Result<Self, Error> {
+        if self.is_expired() {
+            return Err(Error::expired("expired"));
+        }
+        Ok(self)
+    }
+    fn none_if_expire(self) -> Option<Self> {
+        if self.is_expired() {
+            return None;
+        }
+        Some(self)
+    }
+}
+
+pub trait IntoValue {
+    type Target;
+    fn into_value(self) -> Self::Target;
+}

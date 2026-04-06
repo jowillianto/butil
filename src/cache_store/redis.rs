@@ -2,11 +2,11 @@ use redis::AsyncTypedCommands;
 
 use super::{error::Error, prelude::Service};
 
-pub struct RedisService {
+pub struct Redis {
     conn: redis::aio::MultiplexedConnection,
 }
 
-impl RedisService {
+impl Redis {
     pub async fn connect(
         conn_info: impl redis::IntoConnectionInfo,
     ) -> Result<Self, redis::RedisError> {
@@ -17,7 +17,7 @@ impl RedisService {
 }
 
 #[async_trait::async_trait]
-impl Service for RedisService {
+impl Service for Redis {
     type Cache = String;
 
     async fn get(&self, k: &str) -> Result<Option<Self::Cache>, Error> {

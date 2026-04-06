@@ -2,6 +2,7 @@ use super::local::Local;
 use super::prelude::Service;
 use crate::error::ConfigError;
 use crate::prelude::AsyncToService;
+use std::future::Future;
 
 #[derive(Debug, serde::Deserialize)]
 struct S3Config {
@@ -21,12 +22,17 @@ pub enum Config {
     // S3(S3Config),
 }
 
-#[async_trait::async_trait]
 impl AsyncToService for Config {
     type Service = Box<dyn Service + Send + Sync>;
-    async fn to_service(&self) -> Result<Self::Service, ConfigError> {
-        match self {
-            Config::Local(conf) => Ok(Box::new(Local::new(conf.root.clone())) as Self::Service),
+    fn to_service(
+        &self,
+    ) -> impl Future<Output = Result<Self::Service, ConfigError>> {
+        async move {
+            match self {
+                Config::Local(conf) => {
+                    Ok(Box::new(Local::new(conf.root.clone())) as Self::Service)
+                }
+            }
         }
     }
 }

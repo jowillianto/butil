@@ -1,5 +1,6 @@
 use crate::error::ConfigError;
 use crate::prelude::AsyncToService;
+use std::future::Future;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "provider", rename_all = "snake_case")]
@@ -77,13 +78,16 @@ impl Config {
     }
 }
 
-#[async_trait::async_trait]
 impl AsyncToService for Config {
     type Service = sea_orm::DatabaseConnection;
 
-    async fn to_service(&self) -> Result<Self::Service, ConfigError> {
-        self.connect()
-            .await
-            .map_err(|e| crate::config_error!("db::Config", "connect: {}", e))
+    fn to_service(
+        &self,
+    ) -> impl Future<Output = Result<Self::Service, ConfigError>> {
+        async move {
+            self.connect()
+                .await
+                .map_err(|e| crate::config_error!("db::Config", "connect: {}", e))
+        }
     }
 }

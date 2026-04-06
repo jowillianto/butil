@@ -16,28 +16,39 @@ pub struct Error {
 }
 
 impl Error {
-    pub fn no_key(reason: impl Into<String>) -> Self {
-        Self::builder(Kind::NoKey).reason(reason).build()
+    pub fn no_key(reason: impl Display) -> Self {
+        Self {
+            kind: Kind::NoKey,
+            reason: format!("{}", reason),
+        }
     }
 
     pub fn transport(reason: impl Display) -> Self {
-        Self::builder(Kind::Transport).reason_display(reason).build()
+        Self {
+            kind: Kind::Transport,
+            reason: format!("{}", reason),
+        }
     }
 
     pub fn expired(reason: impl Display) -> Self {
-        Self::builder(Kind::Expired).reason_display(reason).build()
+        Self {
+            kind: Kind::Expired,
+            reason: format!("{}", reason),
+        }
     }
 
     pub fn to_cache(reason: impl Display) -> Self {
-        Self::builder(Kind::ToCache).reason_display(reason).build()
+        Self {
+            kind: Kind::ToCache,
+            reason: format!("{}", reason),
+        }
     }
 
     pub fn from_cache(reason: impl Display) -> Self {
-        Self::builder(Kind::FromCache).reason_display(reason).build()
-    }
-
-    pub fn builder(kind: Kind) -> ErrorBuilder {
-        ErrorBuilder::new(kind)
+        Self {
+            kind: Kind::FromCache,
+            reason: format!("{}", reason),
+        }
     }
 
     pub fn kind(&self) -> Kind {
@@ -52,36 +63,5 @@ impl Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CacheError(kind: {:?}, err: {})", self.kind, self.reason)
-    }
-}
-
-pub struct ErrorBuilder {
-    kind: Kind,
-    reason: String,
-}
-
-impl ErrorBuilder {
-    pub fn new(kind: Kind) -> Self {
-        Self {
-            kind,
-            reason: String::new(),
-        }
-    }
-
-    pub fn reason(mut self, reason: impl Into<String>) -> Self {
-        self.reason = reason.into();
-        self
-    }
-
-    pub fn reason_display(mut self, reason: impl Display) -> Self {
-        self.reason = reason.to_string();
-        self
-    }
-
-    pub fn build(self) -> Error {
-        Error {
-            kind: self.kind,
-            reason: self.reason,
-        }
     }
 }

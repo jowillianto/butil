@@ -1,4 +1,5 @@
-use super::error::Error;
+use super::prelude::IsExpired;
+use crate::cache_store::prelude::IntoValue;
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TtlValue<T>(pub T, pub chrono::NaiveDateTime);
@@ -20,34 +21,6 @@ impl<T> TtlValue<T> {
         self.1 <= chrono::Utc::now().naive_utc()
     }
 
-    pub fn error_if_expire(self) -> Result<Self, Error> {
-        if self.is_expired() {
-            return Err(Error::no_key(format!(
-                "cache value expired at {}",
-                self.expire_date()
-            )));
-        }
-        Ok(self)
-    }
-
-    pub fn none_if_expire(self) -> Option<Self> {
-        if self.is_expired() {
-            return None;
-        }
-        Some(self)
-    }
-
-    pub fn check_to_option(value: Option<Self>) -> Option<Self> {
-        value.and_then(Self::none_if_expire)
-    }
-
-    pub fn check_to_error(value: Option<Self>) -> Result<Self, Error> {
-        match value {
-            Some(v) => v.error_if_expire(),
-            None => Err(Error::no_key("cache value is missing")),
-        }
-    }
-
     pub fn increase_ttl(&mut self, dur: chrono::Duration) {
         self.1 += dur;
     }
@@ -56,5 +29,18 @@ impl<T> TtlValue<T> {
 impl<T> From<(T, chrono::NaiveDateTime)> for TtlValue<T> {
     fn from((value, expire_date): (T, chrono::NaiveDateTime)) -> Self {
         Self(value, expire_date)
+    }
+}
+
+impl<T> IsExpired for TtlValue<T> {
+    fn is_expired(&self) -> bool {
+        self.1 <= chrono::Utc::now().naive_utc()
+    }
+}
+
+impl<T> IntoValue for TtlValue<T> {
+    type Target = T;
+    fn into_value(self) -> T {
+        self.0
     }
 }

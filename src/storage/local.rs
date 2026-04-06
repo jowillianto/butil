@@ -15,8 +15,8 @@ impl Local {
 
 #[async_trait::async_trait]
 impl Service for Local {
-    fn base_path(&self) -> String {
-        self.root.to_string_lossy().into()
+    fn local_base_path(&self) -> &std::path::Path {
+        &self.root
     }
     async fn read(&self, p: &str) -> Result<Box<dyn AsyncRead + Unpin>, Error> {
         let f = tokio::fs::File::open(self.root.join(p))
