@@ -13,10 +13,7 @@ enum Provider {
         name: String,
     },
     #[cfg(feature = "db-sqlite")]
-    Sqlite {
-        file: String,
-        mode: String,
-    },
+    Sqlite { file: String, mode: String },
     #[cfg(feature = "db-sqlite")]
     InMemory {},
 }
@@ -81,9 +78,7 @@ impl Config {
 impl AsyncToService for Config {
     type Service = sea_orm::DatabaseConnection;
 
-    fn to_service(
-        &self,
-    ) -> impl Future<Output = Result<Self::Service, ConfigError>> {
+    fn to_service(&self) -> impl Future<Output = Result<Self::Service, ConfigError>> {
         async move {
             self.connect()
                 .await

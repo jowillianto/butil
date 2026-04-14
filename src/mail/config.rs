@@ -30,9 +30,7 @@ pub enum Config {
 impl AsyncToService for Config {
     type Service = Queue;
 
-    fn to_service(
-        &self,
-    ) -> impl Future<Output = Result<Self::Service, ConfigError>> {
+    fn to_service(&self) -> impl Future<Output = Result<Self::Service, ConfigError>> {
         async move {
             match self {
                 #[cfg(feature = "mail-smtp")]
