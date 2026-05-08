@@ -69,7 +69,10 @@ impl<O: 'static> Worker<O> {
         None
     }
     pub fn is_running(&self) -> bool {
-        !self.cancel_token.is_cancelled()
+        self.worker.is_some()
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token.is_cancelled()
     }
     pub fn cancel(&self) {
         self.cancel_token.cancel();
