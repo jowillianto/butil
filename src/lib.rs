@@ -1,6 +1,8 @@
+pub mod config_loader;
 pub mod error;
 pub mod prelude;
 pub mod worker;
+pub use config_loader::ConfigLoader;
 pub use worker::Worker;
 
 pub use async_trait;

@@ -14,6 +14,7 @@ tokio-util = { version = "0.7.18" }
 tokio = { version = "1.48.0", features = ["sync", "rt", "macros"] }
 butil-macro = { path = "macro" }
 atomic_enum = "0.3.0"
+regex = "1"
 chrono = { version = "0.4", optional = true }
 serde_json = { version = "1.0.145", optional = true }
 argon2 = { version = "0.5.3", optional = true }
