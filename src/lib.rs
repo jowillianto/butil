@@ -1,3 +1,5 @@
+#[cfg(feature = "tokio")]
+pub mod actor;
 pub mod config_loader;
 pub mod error;
 pub mod prelude;

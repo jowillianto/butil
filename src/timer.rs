@@ -46,3 +46,37 @@ pub async fn wait_or_option<O, L: Future<Output = Option<O>>, R: Future<Output =
         Either::Right(_) => None,
     }
 }
+
+pub enum Either3<A, B, C> {
+    Left(A),
+    Center(B),
+    Right(C),
+}
+
+impl<A, B, C> Either3<A, B, C> {
+    pub async fn wait<FA, FB, FC>(a: FA, b: FB, c: FC) -> Either3<A, B, C>
+    where
+        FA: Future<Output = A>,
+        FB: Future<Output = B>,
+        FC: Future<Output = C>,
+    {
+        tokio::select! {
+          v = a => Either3::Left(v),
+          v = b => Either3::Center(v),
+          v = c => Either3::Right(v),
+        }
+    }
+}
+
+pub async fn wait_or3<A, B, FA, FB, FC>(a: FA, b: FB, cancel: FC) -> Option<Either<A, B>>
+where
+    FA: Future<Output = A>,
+    FB: Future<Output = B>,
+    FC: Future<Output = ()>,
+{
+    match Either3::wait(a, b, cancel).await {
+        Either3::Left(v) => Some(Either::Left(v)),
+        Either3::Center(v) => Some(Either::Right(v)),
+        Either3::Right(_) => None,
+    }
+}
