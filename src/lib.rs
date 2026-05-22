@@ -2,10 +2,25 @@
 pub mod actor;
 pub mod config_loader;
 pub mod error;
+pub mod keyvec;
 pub mod prelude;
 pub mod worker;
 pub use config_loader::ConfigLoader;
+pub use keyvec::{BoundedKeyVec, KeyVec};
 pub use worker::Worker;
+
+#[cfg(feature = "js")]
+pub fn get_unix_timestamp_us() -> u64 {
+    (js_sys::Date::now() * 1_000.0) as u64
+}
+
+#[cfg(not(feature = "js"))]
+pub fn get_unix_timestamp_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_micros() as u64
+}
 
 pub use async_trait;
 pub use butil_macro::AsyncToService;
@@ -45,8 +60,3 @@ pub mod timer;
 #[cfg(feature = "tokio")]
 pub use timer::{wait_for, wait_or, wait_or_option};
 
-#[cfg(feature = "mq-base")]
-pub mod mq;
-
-#[cfg(feature = "mq-base")]
-pub use mq::Listener;
