@@ -199,8 +199,13 @@ pub trait Context<E: Send + 'static>: Send {
     fn init(&mut self) -> impl Send + Future<Output = ()> {
         async {}
     }
-    fn on_event(&mut self, e: E) -> impl Send + Future<Output = ()> {
-        async {}
+    /* Return `true` to keep the loop running; `false` to terminate (deinit
+     * still runs afterwards). */
+    fn on_event(&mut self, e: E) -> impl Send + Future<Output = bool> {
+        async {
+            let _ = e;
+            true
+        }
     }
     fn deinit(&mut self) -> impl Send + Future<Output = ()> {
         async {}
@@ -235,19 +240,29 @@ impl<E: Send + 'static> Actor<E> {
         let worker = Worker::new(async move |cancel_token| {
             ctx.init().await;
             status2.activate();
+            let mut should_drain = true;
             while let Some(e) = wait_or_option(stream.next(), cancel_token.cancelled()).await {
-                ctx.on_event(e).await;
-            }
-            if config.shutdown_action == ShutdownAction::Drain {
-                use futures::FutureExt;
-                while let Some(Some(e)) = stream.next().now_or_never() {
-                    ctx.on_event(e).await;
+                if !ctx.on_event(e).await {
+                    should_drain = false;
+                    break;
                 }
-            } else if config.shutdown_action == ShutdownAction::Wait {
-                while !ctx.is_complete()
-                    && let Some(e) = stream.next().await
-                {
-                    ctx.on_event(e).await;
+            }
+            if should_drain {
+                if config.shutdown_action == ShutdownAction::Drain {
+                    use futures::FutureExt;
+                    while let Some(Some(e)) = stream.next().now_or_never() {
+                        if !ctx.on_event(e).await {
+                            break;
+                        }
+                    }
+                } else if config.shutdown_action == ShutdownAction::Wait {
+                    while !ctx.is_complete()
+                        && let Some(e) = stream.next().await
+                    {
+                        if !ctx.on_event(e).await {
+                            break;
+                        }
+                    }
                 }
             }
             ctx.deinit().await;
@@ -367,21 +382,25 @@ impl<E: Send + Sync + 'static> Default for ListenerCtx<E> {
 impl<E: Send + Sync + 'static> Context<ListenerEvent<E>> for ListenerCtx<E> {
     async fn init(&mut self) {}
 
-    async fn on_event(&mut self, e: ListenerEvent<E>) {
+    async fn on_event(&mut self, e: ListenerEvent<E>) -> bool {
         match e {
             ListenerEvent::Reg { id, sender } => {
                 self.listeners.insert_no_check(id, sender);
+                true
             }
             ListenerEvent::Unreg { id } => {
                 self.listeners.remove(&id);
+                true
             }
             ListenerEvent::Notify { event } => {
                 for (_, sender) in self.listeners.iter() {
                     sender.send(&event).await;
                 }
+                true
             }
             ListenerEvent::Len { reply } => {
                 let _ = reply.send(self.listeners.len());
+                true
             }
         }
     }
