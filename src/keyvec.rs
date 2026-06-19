@@ -24,8 +24,15 @@ impl<K, V> KeyVec<K, V> {
         self.inner.push((k.into(), v.into()));
         true
     }
-    pub fn insert_no_check(&mut self, k: impl Into<K>, v: impl Into<V>) {
+    pub fn filter_self(&mut self, f: impl FnMut(&(K, V)) -> bool) {
+        self.inner = std::mem::take::<Vec<(K, V)>>(&mut self.inner)
+            .into_iter()
+            .filter(f)
+            .collect();
+    }
+    pub fn insert_no_check(&mut self, k: impl Into<K>, v: impl Into<V>) -> &mut V {
         self.inner.push((k.into(), v.into()));
+        &mut self.inner.iter_mut().last().unwrap().1
     }
     pub fn get(&self, k: &(impl PartialEq<K> + ?Sized)) -> Option<&V> {
         self.inner
@@ -88,6 +95,14 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for KeyVec<K, V> {
 impl<K, V> Default for KeyVec<K, V> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<K, V> IntoIterator for KeyVec<K, V> {
+    type Item = (K, V);
+    type IntoIter = std::vec::IntoIter<(K, V)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 
