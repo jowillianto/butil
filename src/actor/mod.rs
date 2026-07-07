@@ -1,3 +1,7 @@
+pub mod record;
+#[cfg(feature = "actor-redis")]
+pub mod redis;
+pub mod wire;
 use std::sync::{Arc, atomic::Ordering};
 
 use atomic_enum::atomic_enum;
@@ -71,14 +75,14 @@ impl<T> Receiver<T> {
 pub fn new_pair<T>(
     timeout: tokio::time::Duration,
 ) -> (tokio::sync::oneshot::Sender<T>, Receiver<T>) {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let (tx, rx) = tokio::sync::oneshot::channel();
     let (worker, ctx) = RecvCtx::new(timeout);
-    let receiver = Receiver {
-        inner: receiver,
+    let rx = Receiver {
+        inner: rx,
         ctx,
         _worker: worker,
     };
-    (sender, receiver)
+    (tx, rx)
 }
 
 /* Actor System */
@@ -287,13 +291,13 @@ impl<E: Send + 'static> Actor<E> {
     where
         C: 'static + Context<E>,
     {
-        let (sender, receiver) = tokio::sync::mpsc::channel::<E>(buf_size);
+        let (tx, rx) = tokio::sync::mpsc::channel::<E>(buf_size);
         let actor = Self::new(
             config,
             ctx,
-            tokio_stream::wrappers::ReceiverStream::new(receiver),
+            tokio_stream::wrappers::ReceiverStream::new(rx),
         );
-        (actor, sender)
+        (actor, tx)
     }
 
     pub async fn stop(&self) {
@@ -319,7 +323,7 @@ pub trait ActorSender<E: Send + Sync + 'static>: Send + Sync {
 pub enum ListenerEvent<E: Send + Sync + 'static> {
     Reg {
         id: usize,
-        sender: Arc<dyn ActorSender<E>>,
+        tx: Arc<dyn ActorSender<E>>,
     },
     Unreg {
         id: usize,
@@ -328,22 +332,22 @@ pub enum ListenerEvent<E: Send + Sync + 'static> {
         event: E,
     },
     Len {
-        reply: tokio::sync::oneshot::Sender<usize>,
+        tx: tokio::sync::oneshot::Sender<usize>,
     },
 }
 
 impl<E: Send + Sync + 'static> ListenerEvent<E> {
-    pub fn reg(sender: impl 'static + ActorSender<E>) -> (Self, usize) {
-        let sender = Arc::new(sender) as Arc<dyn ActorSender<E>>;
-        let id = (sender.as_ref() as *const dyn ActorSender<E>).addr();
-        (Self::Reg { id, sender }, id)
+    pub fn reg(tx: impl 'static + ActorSender<E>) -> (Self, usize) {
+        let tx = Arc::new(tx) as Arc<dyn ActorSender<E>>;
+        let id = (tx.as_ref() as *const dyn ActorSender<E>).addr();
+        (Self::Reg { id, tx }, id)
     }
     pub fn unreg(id: usize) -> Self {
         Self::Unreg { id }
     }
     pub fn len(timeout: tokio::time::Duration) -> (Self, Receiver<usize>) {
-        let (sender, receiver) = new_pair(timeout);
-        (Self::Len { reply: sender }, receiver)
+        let (tx, rx) = new_pair(timeout);
+        (Self::Len { tx: tx }, rx)
     }
     pub fn notify(event: E) -> Self {
         Self::Notify { event }
@@ -384,8 +388,8 @@ impl<E: Send + Sync + 'static> Context<ListenerEvent<E>> for ListenerCtx<E> {
 
     async fn on_event(&mut self, e: ListenerEvent<E>) -> bool {
         match e {
-            ListenerEvent::Reg { id, sender } => {
-                self.listeners.insert_no_check(id, sender);
+            ListenerEvent::Reg { id, tx } => {
+                self.listeners.insert_no_check(id, tx);
                 true
             }
             ListenerEvent::Unreg { id } => {
@@ -393,13 +397,13 @@ impl<E: Send + Sync + 'static> Context<ListenerEvent<E>> for ListenerCtx<E> {
                 true
             }
             ListenerEvent::Notify { event } => {
-                for (_, sender) in self.listeners.iter() {
-                    sender.send(&event).await;
+                for (_, tx) in self.listeners.iter() {
+                    tx.send(&event).await;
                 }
                 true
             }
-            ListenerEvent::Len { reply } => {
-                let _ = reply.send(self.listeners.len());
+            ListenerEvent::Len { tx } => {
+                let _ = tx.send(self.listeners.len());
                 true
             }
         }

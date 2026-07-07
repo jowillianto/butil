@@ -4,7 +4,7 @@ use super::error::Error;
 use super::prelude::Service;
 
 pub struct Queue {
-    sender: tokio::sync::mpsc::Sender<lettre::Message>,
+    tx: tokio::sync::mpsc::Sender<lettre::Message>,
     worker: Option<tokio::task::JoinHandle<()>>,
     cancel_token: tokio_util::sync::CancellationToken,
 }
@@ -15,12 +15,12 @@ impl Queue {
         queue_size: usize,
         on_err: F,
     ) -> Self {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(queue_size);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(queue_size);
         let cancel_token = tokio_util::sync::CancellationToken::new();
         let worker_token = cancel_token.clone();
         let worker = tokio::task::spawn(async move {
             while let Some(msg) = tokio::select! {
-                msg = receiver.recv() => msg,
+                msg = rx.recv() => msg,
                 _ = worker_token.cancelled() => None
             } {
                 if let Err(e) = s.send(msg).await {
@@ -32,7 +32,7 @@ impl Queue {
             }
         });
         Self {
-            sender,
+            tx,
             worker: Some(worker),
             cancel_token,
         }
@@ -46,7 +46,7 @@ impl Queue {
     }
 
     pub async fn send(&self, mail: lettre::Message) {
-        self.sender.send(mail).await.expect("cannot err")
+        self.tx.send(mail).await.expect("cannot err")
     }
 }
 

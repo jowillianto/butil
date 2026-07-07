@@ -171,6 +171,10 @@ impl<K, V> BoundedKeyVec<K, V> {
         self.inner.insert_no_check(k, v);
     }
 
+    pub fn filter_self(&mut self, f: impl FnMut(&(K, V)) -> bool) {
+        self.inner.filter_self(f);
+    }
+
     pub fn get(&self, k: &(impl PartialEq<K> + ?Sized)) -> Option<&V> {
         self.inner.get(k)
     }
