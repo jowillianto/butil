@@ -1,4 +1,4 @@
-use super::{Actor, ActorConfig, ActorStatus, Context};
+use super::{Actor, ActorConfig, ActorStatus, Context, new_pair};
 use crate::KeyVec;
 use crate::Worker;
 use crate::wait_or;
@@ -11,8 +11,6 @@ pub trait Record<Id> {
         ttl: tokio::time::Duration,
     ) -> impl Send + Future<Output = Result<(), Self::Error>>;
     fn unreg(&mut self, id: &Id) -> impl Send + Future<Output = Result<(), Self::Error>>;
-    /* Global presence query. Backends that only track locally leave this at the
-     * default, so `Has` resolves to `false` for them. */
     fn has(&mut self, _id: &Id) -> impl Send + Future<Output = Result<bool, Self::Error>> {
         async { Ok(false) }
     }
@@ -84,15 +82,10 @@ where
                 }
             }
             RecordEvent::Refresh => {
-                let mut ids: KeyVec<Id, tokio::time::Instant> = KeyVec::new();
-                for (id, tp) in self.ids.iter() {
-                    if tp.elapsed() > self.ttl && self.record.unreg(&id).await.is_err() {
-                        ids.insert_no_check(id.clone(), tokio::time::Instant::now());
-                    } else if self.record.reg(&id, self.ttl.clone()).await.is_ok() {
-                        ids.insert_no_check(id.clone(), tokio::time::Instant::now());
-                    }
+                for (id, tp) in self.ids.iter_mut() {
+                    let _ = self.record.reg(&id, self.ttl).await;
+                    *tp = tokio::time::Instant::now();
                 }
-                self.ids = ids;
             }
         }
         true
@@ -123,7 +116,6 @@ impl<Id: Eq + Clone + Send + Sync + 'static> RecordActor<Id> {
         let refresh_tx = tx.clone();
         let refresh_worker = Worker::new(async move |cancel_token| {
             let mut interval = tokio::time::interval(refresh_interval);
-            interval.tick().await;
             while wait_or(interval.tick(), cancel_token.cancelled())
                 .await
                 .is_some()
@@ -176,6 +168,10 @@ impl<Id: Eq + Clone + Send + Sync + 'static> RecordActor<Id> {
         self.tx.clone()
     }
 
+    pub fn mailbox(&self, timeout: tokio::time::Duration) -> RecordMailbox<Id> {
+        RecordMailbox::new(self.tx.clone(), timeout)
+    }
+
     pub async fn stop(&self) {
         self.actor.stop().await;
         self.refresh_worker.cancel();
@@ -190,3 +186,57 @@ impl<Id: Eq + Clone + Send + Sync + 'static> RecordActor<Id> {
     }
 }
 
+/* A cloneable handle onto a `RecordActor`, for registering/querying presence
+ * from anywhere that holds one. */
+#[derive(Debug)]
+pub struct RecordMailbox<Id> {
+    tx: tokio::sync::mpsc::Sender<RecordEvent<Id>>,
+    timeout: tokio::time::Duration,
+}
+
+impl<Id> Clone for RecordMailbox<Id> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            timeout: self.timeout,
+        }
+    }
+}
+
+impl<Id> RecordMailbox<Id> {
+    pub fn new(
+        tx: tokio::sync::mpsc::Sender<RecordEvent<Id>>,
+        timeout: tokio::time::Duration,
+    ) -> Self {
+        Self { tx, timeout }
+    }
+
+    pub async fn reg(&self, id: Id) -> bool {
+        self.tx.send(RecordEvent::Reg { id }).await.is_ok()
+    }
+
+    pub async fn unreg(&self, id: Id) -> bool {
+        self.tx.send(RecordEvent::Unreg { id }).await.is_ok()
+    }
+
+    pub async fn local_has(&self, id: Id) -> bool {
+        let (tx, rx) = new_pair(self.timeout);
+        if self
+            .tx
+            .send(RecordEvent::LocalHas { id, tx })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        rx.recv().await.unwrap_or(false)
+    }
+
+    pub async fn has(&self, id: Id) -> bool {
+        let (tx, rx) = new_pair(self.timeout);
+        if self.tx.send(RecordEvent::Has { id, tx }).await.is_err() {
+            return false;
+        }
+        rx.recv().await.unwrap_or(false)
+    }
+}
