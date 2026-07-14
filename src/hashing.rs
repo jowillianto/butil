@@ -5,7 +5,7 @@ use argon2::{
 use std::str::FromStr;
 
 pub fn make_password(raw_password: &str) -> Result<String, Error> {
-    let salt = SaltString::generate(&mut OsRng);
+    let salt = SaltString::generate(OsRng);
     let argon2 = Argon2::default();
     let hash = argon2.hash_password(raw_password.as_bytes(), &salt)?;
     Ok(hash.serialize().to_string())
