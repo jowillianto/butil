@@ -11,21 +11,21 @@ path = "src/lib.rs"
 serde = { version = "1.0.228", features = ["derive"] }
 async-trait = { version = "0.1.89" }
 tokio-util = { version = "0.7.18" }
-tokio = { version = "1.48.0", features = ["sync", "rt", "macros", "time"] }
+tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "time"] }
 tokio-stream = { version = "0.1" }
 futures = "0.3"
 butil-macro = { path = "macro" }
 atomic_enum = "0.3.0"
 regex = "1"
 prost = "0.14"
-uuid = { version = "1.19.0", features = ["v4", "serde"], optional = true }
+uuid = { version = "1.23.5", features = ["v4", "serde"], optional = true }
 chrono = { version = "0.4", optional = true }
-serde_json = { version = "1.0.145", optional = true }
+serde_json = { version = "1.0.150", optional = true }
 argon2 = { version = "0.5.3", optional = true }
 js-sys = { version = "0.3", optional = true }
 
 [dependencies.sea-orm]
-version = "2.0.0-rc"
+version = "2.0.0-rc.42"
 optional = true
 features = [
   "sqlx-postgres",
@@ -34,7 +34,7 @@ features = [
 ]
 
 [dependencies.lettre]
-version = "0.11.19"
+version = "0.11.22"
 default-features = false
 optional = true
 features = [
