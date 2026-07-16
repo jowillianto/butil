@@ -82,7 +82,8 @@ mail-smtp = [
   "mail-base"
 ]
 mail-base = [
-  "lettre/tokio1-rustls"
+  "lettre/tokio1-rustls",
+  "tokio"
 ]
 
 cache-store = [

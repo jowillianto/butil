@@ -1,58 +1,46 @@
-use std::future::Future;
-
+use super::super::actor::{Context, Receiver, new_pair};
 use super::error::Error;
-use super::prelude::Service;
 
-pub struct Queue {
-    tx: tokio::sync::mpsc::Sender<lettre::Message>,
-    worker: Option<tokio::task::JoinHandle<()>>,
-    cancel_token: tokio_util::sync::CancellationToken,
+pub struct Event {
+    msg: lettre::Message,
+    tx: tokio::sync::oneshot::Sender<Result<(), Error>>,
 }
 
-impl Queue {
-    pub fn new<O: Send + Future<Output = ()>, F: 'static + Send + Fn(Error) -> O>(
-        s: impl 'static + Service + Send,
-        queue_size: usize,
-        on_err: F,
-    ) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(queue_size);
-        let cancel_token = tokio_util::sync::CancellationToken::new();
-        let worker_token = cancel_token.clone();
-        let worker = tokio::task::spawn(async move {
-            while let Some(msg) = tokio::select! {
-                msg = rx.recv() => msg,
-                _ = worker_token.cancelled() => None
-            } {
-                if let Err(e) = s.send(msg).await {
-                    on_err(e).await;
-                }
-            }
-            if let Err(e) = s.shutdown().await {
-                on_err(e).await;
-            }
-        });
-        Self {
-            tx,
-            worker: Some(worker),
-            cancel_token,
-        }
+impl Event {
+    pub fn new_ignore(msg: lettre::Message) -> Event {
+        let (tx, _) = new_pair(tokio::time::Duration::from_secs(0));
+        Event { tx, msg }
     }
-
-    pub async fn stop(&mut self) {
-        self.cancel_token.cancel();
-        if let Some(worker) = self.worker.take() {
-            worker.await.expect("no panic");
-        }
-    }
-
-    pub async fn send(&self, mail: lettre::Message) {
-        self.tx.send(mail).await.expect("cannot err")
+    pub fn new_with_rx(
+        msg: lettre::Message,
+        dur: tokio::time::Duration,
+    ) -> (Event, Receiver<Result<(), Error>>) {
+        let (tx, rx) = new_pair(dur);
+        let e = Event { tx, msg };
+        (e, rx)
     }
 }
 
-impl Drop for Queue {
-    fn drop(&mut self) {
-        self.cancel_token.cancel();
-        self.worker.take();
+pub struct Ctx<T> {
+    pub transport: T,
+}
+
+impl<T> Context<Event> for Ctx<T>
+where
+    T: lettre::AsyncTransport<Error: std::fmt::Display> + Send + Sync,
+{
+    async fn on_event(&mut self, e: Event) -> bool {
+        let res = self
+            .transport
+            .send(e.msg)
+            .await
+            .map(|_| ())
+            .map_err(Error::new);
+        let _ = e.tx.send(res);
+        true
+    }
+
+    async fn deinit(&mut self) {
+        self.transport.shutdown().await;
     }
 }
