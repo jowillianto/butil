@@ -16,13 +16,13 @@ tokio-stream = { version = "0.1" }
 futures = "0.3"
 butil-macro = { path = "macro" }
 atomic_enum = "0.3.0"
-regex = "1"
 prost = "0.14"
 uuid = { version = "1.23.5", features = ["v4", "serde"], optional = true }
 chrono = { version = "0.4", optional = true }
 serde_json = { version = "1.0.150", optional = true }
 argon2 = { version = "0.5.3", features = ["std"], optional = true }
 js-sys = { version = "0.3", optional = true }
+minijinja = { version = "2" }
 
 [dependencies.sea-orm]
 version = "2.0.0-rc.42"
