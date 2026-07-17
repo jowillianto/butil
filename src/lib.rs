@@ -28,6 +28,9 @@ pub use butil_macro::AsyncToService;
 #[cfg(feature = "db-base")]
 pub mod db;
 
+#[cfg(feature = "fixture-loader")]
+pub mod fixture_loader;
+
 #[cfg(feature = "mail-base")]
 pub mod mail;
 
