@@ -14,7 +14,6 @@ tokio-util = { version = "0.7.18" }
 tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "time"] }
 tokio-stream = { version = "0.1" }
 futures = "0.3"
-butil-macro = { path = "macro" }
 atomic_enum = "0.3.0"
 prost = "0.14"
 uuid = { version = "1.23.5", features = ["v4", "serde"], optional = true }
@@ -87,24 +86,17 @@ mail-base = [
   "tokio"
 ]
 
-cache-store = [
-  "cache-store-redis",
-  "cache-store-memory"
-]
-cache-store-redis = ["dep:redis", "cache-store-base"]
-cache-store-memory = ["cache-store-base"]
-cache-store-base = ["dep:chrono", "dep:serde_json"]
-
 storage = [
   "storage-local"
 ]
 storage-local = ["storage-base"]
 storage-base = []
 
+cache-redis = ["tokio", "dep:redis", "dep:serde_json"]
 
 fixture-loader = ["db-base", "dep:toml"]
 
 hashing = ["dep:argon2"]
-tokio = ["dep:uuid"]
+tokio = ["dep:uuid", "dep:chrono"]
 actor-redis = ["tokio", "dep:redis", "dep:serde_json"]
 js = ["dep:js-sys"]
