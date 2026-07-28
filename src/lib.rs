@@ -32,6 +32,8 @@ pub mod fixture_loader;
 
 #[cfg(feature = "mail-base")]
 pub mod mail;
+#[cfg(feature = "mail-base")]
+pub use mail::{Config as MailConfig, Ctx as MailCtx, Error as MailError};
 
 #[cfg(feature = "storage-base")]
 pub mod storage;
@@ -39,8 +41,6 @@ pub mod storage;
 #[cfg(feature = "hashing")]
 pub mod hashing;
 
-#[cfg(feature = "mail-base")]
-pub use mail::Config as MailConfig;
 #[cfg(feature = "storage-base")]
 pub use storage::{Config as StorageConfig, Service as StorageService};
 

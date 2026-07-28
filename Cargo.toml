@@ -11,7 +11,7 @@ path = "src/lib.rs"
 serde = { version = "1.0.228", features = ["derive"] }
 async-trait = { version = "0.1.89" }
 tokio-util = { version = "0.7.18" }
-tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "time"] }
+tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "time", "fs"] }
 tokio-stream = { version = "0.1" }
 futures = "0.3"
 atomic_enum = "0.3.0"
