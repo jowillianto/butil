@@ -82,25 +82,41 @@ pub trait ParseMail<Ctx> {
     fn parse_mail(&self, ctx: &Ctx) -> Result<String, Error>;
 }
 
+pub trait ParseMailAck<Ctx> {
+    fn parse_mail_ack(&self, ctx: &Ctx) -> Result<Option<String>, Error>;
+}
+
 /*
  * Jjinja template substitution
  */
 pub struct JjinjaCss {
     template: String,
+    ack: Option<String>,
 }
 
 impl JjinjaCss {
     pub async fn from_file(p: impl AsRef<std::path::Path>) -> Result<Self, tokio::io::Error> {
         let p = p.as_ref();
+        let css_path = p.with_extension("css");
+        let css = tokio::fs::read_to_string(&css_path).await?;
         let html = tokio::fs::read_to_string(p).await?;
-        let css = tokio::fs::read_to_string(p.with_extension("css")).await?;
+        let ack_css = tokio::fs::read_to_string(format!("{}.ack", css_path.display()))
+            .await
+            .ok();
+        let ack_html = tokio::fs::read_to_string(format!("{}.ack", p.display()))
+            .await
+            .ok();
         Ok(Self {
             template: html.replacen("</head>", &format!("<style>{}</style></head>", css), 1),
+            ack: ack_html.zip(ack_css).map(|(html, css)| {
+                html.replacen("</head>", &format!("<style>{}</style></head>", css), 1)
+            }),
         })
     }
     pub fn new(template: impl Into<String>) -> Self {
         Self {
             template: template.into(),
+            ack: None,
         }
     }
 }
@@ -120,6 +136,21 @@ impl ParseMail<HashMap<String, String>> for JjinjaCss {
         /*
          * run tailwind css
          */
+    }
+}
+
+impl ParseMailAck<HashMap<String, String>> for JjinjaCss {
+    fn parse_mail_ack(&self, ctx: &HashMap<String, String>) -> Result<Option<String>, Error> {
+        let Some(ack) = self.ack.as_ref() else {
+            return Ok(None);
+        };
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        env.render_str(ack, ctx).map(Some).map_err(|e| {
+            Error::new("mail::ack_render", e.to_string()).suggest(
+                "check that every variable referenced by the ack template is present in the context",
+            )
+        })
     }
 }
 
@@ -189,48 +220,43 @@ fn default_usize<const N: usize>() -> usize {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "provider", rename_all = "snake_case")]
-pub enum Config {
+pub enum TransportConfig {
     #[cfg(feature = "mail-smtp")]
     Smtp {
         url: String,
         username: String,
         password: String,
-        #[serde(default = "default_usize::<2048>")]
-        queue_size: usize,
-        templates: String,
     },
     #[cfg(feature = "mail-file")]
-    File {
-        dir: std::path::PathBuf,
-        #[serde(default = "default_usize::<2048>")]
-        queue_size: usize,
-        templates: String,
-    },
+    File { dir: std::path::PathBuf },
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct Config {
+    #[serde(flatten)]
+    transport: TransportConfig,
+    #[serde(default = "default_usize::<2048>")]
+    queue_size: usize,
+    template_dir: std::path::PathBuf,
+    pub template_ack: Vec<String>,
 }
 
 impl Config {
     pub fn factory(&self) -> JjinjaCssFactory {
         JjinjaCssFactory {
-            dir: match self {
-                #[cfg(feature = "mail-smtp")]
-                Config::Smtp { templates, .. } => templates.into(),
-                #[cfg(feature = "mail-file")]
-                Config::File { templates, .. } => templates.into(),
-            },
+            dir: self.template_dir.clone(),
         }
     }
     pub fn build(
         &self,
     ) -> Result<(Actor<Event>, tokio::sync::mpsc::Sender<Event>), lettre::transport::smtp::Error>
     {
-        match self {
+        match &self.transport {
             #[cfg(feature = "mail-smtp")]
-            Config::Smtp {
+            TransportConfig::Smtp {
                 url,
                 username,
                 password,
-                queue_size,
-                ..
             } => {
                 let tp = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::from_url(url)?
                     .credentials(lettre::transport::smtp::authentication::Credentials::new(
@@ -242,20 +268,18 @@ impl Config {
                     ActorConfig {
                         shutdown_action: ShutdownAction::Drain,
                     },
-                    *queue_size,
+                    self.queue_size,
                     Ctx { transport: tp },
                 ))
             }
             #[cfg(feature = "mail-file")]
-            Config::File {
-                dir, queue_size, ..
-            } => {
+            TransportConfig::File { dir } => {
                 let tp = lettre::AsyncFileTransport::<lettre::Tokio1Executor>::new(dir);
                 Ok(Actor::new_bounded(
                     ActorConfig {
                         shutdown_action: ShutdownAction::Drain,
                     },
-                    *queue_size,
+                    self.queue_size,
                     Ctx { transport: tp },
                 ))
             }
