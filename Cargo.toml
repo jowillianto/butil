@@ -11,7 +11,7 @@ path = "src/lib.rs"
 serde = { version = "1.0.228", features = ["derive"] }
 async-trait = { version = "0.1.89" }
 tokio-util = { version = "0.7.18" }
-tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "time", "fs"] }
+tokio = { version = "1.52.3", features = ["sync", "rt", "macros", "time"] }
 tokio-stream = { version = "0.1" }
 futures = "0.3"
 atomic_enum = "0.3.0"
@@ -83,14 +83,15 @@ mail-smtp = [
 ]
 mail-base = [
   "lettre/tokio1-rustls",
-  "tokio"
+  "tokio",
+  "tokio/fs"
 ]
 
 storage = [
   "storage-local"
 ]
 storage-local = ["storage-base"]
-storage-base = []
+storage-base = ["tokio/fs"]
 
 cache-redis = ["tokio", "dep:redis", "dep:serde_json"]
 
