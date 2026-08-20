@@ -1,4 +1,5 @@
-use super::{Actor, ActorConfig, ActorStatus, Context, new_pair};
+use super::timed_receiver::TimedReceiver;
+use super::{Actor, ActorConfig, ActorStatusKind, Context};
 use crate::KeyVec;
 use crate::Worker;
 use crate::wait_or;
@@ -181,7 +182,7 @@ impl<Id: Eq + Clone + Send + Sync + 'static> RecordActor<Id> {
         self.actor.wait().await;
     }
 
-    pub fn status(&self) -> ActorStatus {
+    pub fn status(&self) -> ActorStatusKind {
         self.actor.status()
     }
 }
@@ -220,7 +221,7 @@ impl<Id> RecordMailbox<Id> {
     }
 
     pub async fn local_has(&self, id: Id) -> bool {
-        let (tx, rx) = new_pair(self.timeout);
+        let (tx, rx) = TimedReceiver::new(self.timeout);
         if self
             .tx
             .send(RecordEvent::LocalHas { id, tx })
@@ -233,7 +234,7 @@ impl<Id> RecordMailbox<Id> {
     }
 
     pub async fn has(&self, id: Id) -> bool {
-        let (tx, rx) = new_pair(self.timeout);
+        let (tx, rx) = TimedReceiver::new(self.timeout);
         if self.tx.send(RecordEvent::Has { id, tx }).await.is_err() {
             return false;
         }

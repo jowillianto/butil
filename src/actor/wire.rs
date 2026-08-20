@@ -14,7 +14,8 @@
  * - Id
  */
 
-use super::{Actor, ActorConfig, ActorStatus, Context, new_pair};
+use super::timed_receiver::{TimedReceiver, TimedReceiverError};
+use super::{Actor, ActorConfig, ActorStatusKind, Context};
 use crate::{BoundedKeyVec, Worker, wait_or};
 use std::marker::PhantomData;
 
@@ -216,14 +217,14 @@ where
     W::Error: Send + 'static,
 {
     pub async fn req(&self, req: Req) -> Result<RawRes, WireError<W::Error>> {
-        let (tx, rx) = new_pair(self.timeout);
+        let (tx, rx) = TimedReceiver::new(self.timeout);
         if self.tx.send(WireEvent::Req { req, tx }).await.is_err() {
             return Err(WireError::Closed);
         }
         match rx.recv().await {
             Ok(result) => result,
-            Err(super::Error::Timeout) => Err(WireError::Timeout),
-            Err(super::Error::Drop) => Err(WireError::Closed),
+            Err(TimedReceiverError::Timeout) => Err(WireError::Timeout),
+            Err(TimedReceiverError::Drop) => Err(WireError::Closed),
         }
     }
 
@@ -232,14 +233,14 @@ where
     }
 
     pub async fn fire(&self, req: Req) -> Result<(), WireError<W::Error>> {
-        let (tx, rx) = new_pair(self.timeout);
+        let (tx, rx) = TimedReceiver::new(self.timeout);
         if self.tx.send(WireEvent::Fire { req, tx }).await.is_err() {
             return Err(WireError::Closed);
         }
         match rx.recv().await {
             Ok(result) => result,
-            Err(super::Error::Timeout) => Err(WireError::Timeout),
-            Err(super::Error::Drop) => Err(WireError::Closed),
+            Err(TimedReceiverError::Timeout) => Err(WireError::Timeout),
+            Err(TimedReceiverError::Drop) => Err(WireError::Closed),
         }
     }
 
@@ -341,7 +342,7 @@ where
         self.actor.wait().await;
     }
 
-    pub fn status(&self) -> ActorStatus {
+    pub fn status(&self) -> ActorStatusKind {
         self.actor.status()
     }
 }

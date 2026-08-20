@@ -174,6 +174,21 @@ impl From<serde_json::Error> for Error {
 }
 
 #[cfg(feature = "cache-redis")]
+impl crate::actor::ActorInfo for RedisCache {
+    const NAME: &'static str = "cache";
+    fn status(&self) -> crate::actor::ActorStatusKind {
+        crate::actor::ActorStatusKind::Active
+    }
+}
+
+#[cfg(feature = "cache-redis")]
+#[async_trait::async_trait]
+impl crate::actor::ActorCtl for RedisCache {
+    async fn stop(&self) {}
+    async fn wait(&self) {}
+}
+
+#[cfg(feature = "cache-redis")]
 pub struct RedisCache {
     conn: redis::aio::MultiplexedConnection,
 }

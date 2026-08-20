@@ -1,4 +1,5 @@
-use super::actor::{Actor, ActorConfig, Context, Receiver, ShutdownAction, new_pair};
+use super::actor::timed_receiver::TimedReceiver;
+use super::actor::{Actor, ActorConfig, Context, ShutdownAction};
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -183,8 +184,8 @@ impl Event {
     pub fn new_with_rx(
         msg: lettre::Message,
         dur: tokio::time::Duration,
-    ) -> (Event, Receiver<Result<(), Error>>) {
-        let (tx, rx) = new_pair(dur);
+    ) -> (Event, TimedReceiver<Result<(), Error>>) {
+        let (tx, rx) = TimedReceiver::new(dur);
         let e = Event { tx, msg };
         (e, rx)
     }
