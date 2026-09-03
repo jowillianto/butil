@@ -38,9 +38,6 @@ pub use mail::{Config as MailConfig, Ctx as MailCtx, Error as MailError};
 #[cfg(feature = "storage-base")]
 pub mod storage;
 
-#[cfg(feature = "hashing")]
-pub mod hashing;
-
 #[cfg(feature = "storage-base")]
 pub use storage::{Config as StorageConfig, Service as StorageService};
 

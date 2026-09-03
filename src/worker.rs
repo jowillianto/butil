@@ -44,29 +44,44 @@ impl<O: 'static + Send + Sync> Worker<O> {
             cancel_on_drop: AtomicBool::new(true),
         }
     }
-    pub fn new_blocking<F: 'static + FnOnce(CancellationToken) -> O + Send + Sync>(f: F) -> Self {
+    pub fn new_blocking<
+        U: 'static + Future<Output = O>,
+        F: 'static + FnOnce(CancellationToken) -> U + Send,
+    >(
+        f: F,
+    ) -> Self {
         Self::new_blocking_on(&tokio::runtime::Handle::current(), f)
     }
-    pub fn new_blocking_with_token<F: 'static + FnOnce(CancellationToken) -> O + Send + Sync>(
+    pub fn new_blocking_with_token<
+        U: 'static + Future<Output = O>,
+        F: 'static + FnOnce(CancellationToken) -> U + Send,
+    >(
         cancel_token: CancellationToken,
         f: F,
     ) -> Self {
         Self::new_blocking_on_with_token(&tokio::runtime::Handle::current(), cancel_token, f)
     }
-    pub fn new_blocking_on<F: 'static + FnOnce(CancellationToken) -> O + Send + Sync>(
+    pub fn new_blocking_on<
+        U: 'static + Future<Output = O>,
+        F: 'static + FnOnce(CancellationToken) -> U + Send,
+    >(
         handle: &tokio::runtime::Handle,
         f: F,
     ) -> Self {
         Self::new_blocking_on_with_token(handle, CancellationToken::new(), f)
     }
-    pub fn new_blocking_on_with_token<F: 'static + FnOnce(CancellationToken) -> O + Send + Sync>(
+    pub fn new_blocking_on_with_token<
+        U: 'static + Future<Output = O>,
+        F: 'static + FnOnce(CancellationToken) -> U + Send,
+    >(
         handle: &tokio::runtime::Handle,
         cancel_token: CancellationToken,
         f: F,
     ) -> Self {
         let cancel_token2 = cancel_token.clone();
+        let handle2 = handle.clone();
         Self {
-            worker: Some(handle.spawn_blocking(move || f(cancel_token2))),
+            worker: Some(handle.spawn_blocking(move || handle2.block_on(f(cancel_token2)))),
             cancel_token,
             cancel_on_drop: AtomicBool::new(true),
         }

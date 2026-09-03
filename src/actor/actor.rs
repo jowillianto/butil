@@ -5,6 +5,7 @@ use std::{
 };
 
 use atomic_enum::atomic_enum;
+use tokio_util::sync::CancellationToken;
 
 use crate::{Worker, wait_or_option};
 
@@ -149,7 +150,7 @@ pub struct Actor<E: Send + 'static> {
 impl<E: Send + 'static> Actor<E> {
     pub fn new<C, S>(config: ActorConfig, ctx: C, stream: S) -> Self
     where
-        C: 'static + Context<E>,
+        C: 'static + Context<E> + Send,
         S: 'static + tokio_stream::Stream<Item = E> + Send + Unpin,
     {
         use tokio_stream::StreamExt;
@@ -157,7 +158,7 @@ impl<E: Send + 'static> Actor<E> {
         let mut stream = stream;
         let status = ActorStatus::new();
         let status2 = status.clone();
-        let worker = Worker::new(async move |cancel_token| {
+        let f = async move |cancel_token: CancellationToken| {
             ctx.init().await;
             status2.activate();
             let mut should_drain = true;
@@ -191,9 +192,9 @@ impl<E: Send + 'static> Actor<E> {
             } else {
                 status2.shutdown_force();
             }
-        });
+        };
         Self {
-            worker: tokio::sync::Mutex::new(worker),
+            worker: tokio::sync::Mutex::new(Worker::new(f)),
             status,
             event: std::marker::PhantomData,
         }

@@ -1,6 +1,6 @@
 [package]
 name = "butil"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 
 [lib]
@@ -19,37 +19,12 @@ prost = "0.14"
 uuid = { version = "1.24.0", features = ["v4", "serde"], optional = true }
 chrono = { version = "0.4", optional = true }
 serde_json = { version = "1.0.151", optional = true }
-argon2 = { version = "0.5.3", features = ["std"], optional = true }
 js-sys = { version = "0.3", optional = true }
 minijinja = { version = "2" }
 toml = { version = "1.1.4", optional = true }
-
-[dependencies.sea-orm]
-version = "2.0.1"
-optional = true
-features = [
-  "sqlx-postgres",
-  "sqlx-sqlite",
-  "runtime-tokio-rustls",
-]
-
-[dependencies.lettre]
-version = "0.11.23"
-default-features = false
-optional = true
-features = [
-  "tokio1-rustls",
-  "builder",
-  "smtp-transport",
-  "rustls-native-certs",
-  "aws-lc-rs",
-  "file-transport"
-]
-
-[dependencies.redis]
-version = "1"
-optional = true
-features = ["tokio-rustls-comp", "aio"]
+sea-orm = { version = "2.0.1", features = ["sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"], optional = true }
+lettre = { version = "0.11.23", default-features = false, features = ["tokio1-rustls", "builder", "smtp-transport", "rustls-native-certs", "aws-lc-rs", "file-transport"], optional = true }
+redis = { version = "1", features = ["tokio-rustls-comp", "aio"], optional = true }
 
 [features]
 default = []
@@ -97,7 +72,6 @@ cache-redis = ["tokio", "dep:redis", "dep:serde_json"]
 
 fixture-loader = ["db-base", "dep:toml"]
 
-hashing = ["dep:argon2"]
 tokio = ["dep:uuid", "dep:chrono"]
 actor-redis = ["tokio", "dep:redis", "dep:serde_json"]
 js = ["dep:js-sys"]
