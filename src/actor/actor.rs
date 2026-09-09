@@ -224,6 +224,7 @@ impl<E: Send + 'static> Actor<E> {
         self.status.phase()
     }
 }
+unsafe impl<E: Send + 'static> Sync for Actor<E> {}
 
 pub trait ActorInfo: Send + Sync {
     const NAME: &'static str;
