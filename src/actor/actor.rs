@@ -9,15 +9,19 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Worker, WorkerArg, wait_or_option};
 
+/// covers three error types:
+/// Gone -> if the actor is gone, i.e. not running
+/// Busy -> actor is fully packed
+/// Internal -> actor error
 pub enum ActorError<E> {
-    Timeout,
+    Gone,
     Busy,
     Internal(E),
 }
 
 impl<E: std::error::Error> ActorError<E> {
-    pub fn is_timeout(&self) -> bool {
-        matches!(self, &Self::Timeout)
+    pub fn is_gone(&self) -> bool {
+        matches!(self, &Self::Gone)
     }
     pub fn is_busy(&self) -> bool {
         matches!(self, &Self::Busy)
