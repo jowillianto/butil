@@ -209,6 +209,7 @@ where
             &channel,
             ActorConfig {
                 shutdown_action: ShutdownAction::Force,
+                ..Default::default()
             },
             instance_id,
             req_res.tx(),

@@ -16,7 +16,7 @@
 
 use super::timed_receiver::{TimedReceiver, TimedReceiverError};
 use super::{Actor, ActorConfig, ActorStatusKind, Context};
-use crate::{BoundedKeyVec, Worker, wait_or};
+use crate::{BoundedKeyVec, Worker, WorkerArg, wait_or};
 use std::marker::PhantomData;
 
 /*
@@ -293,7 +293,7 @@ where
             AsyncWire::new(max_size, cleanup_threshold, id_gen, wire),
         );
         let cleanup_tx = tx.clone();
-        let cleanup = Worker::new(async move |cancel_token| {
+        let cleanup = WorkerArg::new(async move |cancel_token| {
             let mut interval = tokio::time::interval(cleanup_threshold);
             interval.tick().await;
             while wait_or(interval.tick(), cancel_token.cancelled())
@@ -304,7 +304,8 @@ where
                     break;
                 }
             }
-        });
+        })
+        .spawn();
         Self {
             actor,
             mailbox: WireActorMailbox { tx, timeout },

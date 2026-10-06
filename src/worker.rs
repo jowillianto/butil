@@ -1,6 +1,87 @@
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 
+pub struct WorkerArg<'a, F> {
+    func: F,
+    cancel_token: Option<CancellationToken>,
+    handle: Option<&'a tokio::runtime::Handle>,
+}
+
+impl<F> WorkerArg<'static, F> {
+    pub fn new<U>(func: F) -> Self
+    where
+        F: FnOnce(CancellationToken) -> U,
+    {
+        Self {
+            func,
+            cancel_token: None,
+            handle: None,
+        }
+    }
+}
+impl<'a, F> WorkerArg<'a, F> {
+    pub fn with_cancel_token(mut self, c: CancellationToken) -> Self {
+        self.cancel_token = Some(c);
+        self
+    }
+    pub fn with_handle<'b>(self, h: &'b tokio::runtime::Handle) -> WorkerArg<'b, F> {
+        WorkerArg {
+            func: self.func,
+            cancel_token: self.cancel_token,
+            handle: Some(h),
+        }
+    }
+}
+
+impl<
+    'a,
+    O: 'static + Send + Sync,
+    U: 'static + Future<Output = O> + Send,
+    F: FnOnce(CancellationToken) -> U,
+> WorkerArg<'a, F>
+{
+    pub fn spawn(mut self) -> Worker<O> {
+        let cancel_token = self.cancel_token.take().unwrap_or_default();
+        let fut = (self.func)(cancel_token.clone());
+        let token = cancel_token.clone();
+        let fut = async move {
+            let out = fut.await;
+            token.cancel();
+            out
+        };
+        let worker = match self.handle {
+            Some(h) => h.spawn(fut),
+            None => tokio::runtime::Handle::current().spawn(fut),
+        };
+        Worker {
+            worker: Some(worker),
+            cancel_token,
+            cancel_on_drop: AtomicBool::new(true),
+        }
+    }
+}
+
+impl<'a, O: 'static, U: 'static + Future<Output = O>, F: FnOnce(CancellationToken) -> U>
+    WorkerArg<'a, F>
+{
+    /// The handle is ignored; the task is spawned on the current `LocalSet`.
+    pub fn spawn_local(mut self) -> Worker<O> {
+        let cancel_token = self.cancel_token.take().unwrap_or_default();
+        let fut = (self.func)(cancel_token.clone());
+        let token = cancel_token.clone();
+        let fut = async move {
+            let out = fut.await;
+            token.cancel();
+            out
+        };
+        Worker {
+            worker: Some(tokio::task::spawn_local(fut)),
+            cancel_token,
+            cancel_on_drop: AtomicBool::new(true),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Worker<O: 'static> {
     worker: Option<tokio::task::JoinHandle<O>>,
@@ -8,107 +89,7 @@ pub struct Worker<O: 'static> {
     cancel_on_drop: AtomicBool,
 }
 
-impl<O: 'static + Send + Sync> Worker<O> {
-    pub fn new<U: 'static + Future<Output = O> + Send, F: FnOnce(CancellationToken) -> U>(
-        f: F,
-    ) -> Self {
-        Self::new_on(&tokio::runtime::Handle::current(), f)
-    }
-    pub fn new_with_token<
-        U: 'static + Future<Output = O> + Send,
-        F: FnOnce(CancellationToken) -> U,
-    >(
-        cancel_token: CancellationToken,
-        f: F,
-    ) -> Self {
-        Self::new_on_with_token(&tokio::runtime::Handle::current(), cancel_token, f)
-    }
-    pub fn new_on<U: 'static + Future<Output = O> + Send, F: FnOnce(CancellationToken) -> U>(
-        handle: &tokio::runtime::Handle,
-        f: F,
-    ) -> Self {
-        Self::new_on_with_token(handle, CancellationToken::new(), f)
-    }
-    pub fn new_on_with_token<
-        U: 'static + Future<Output = O> + Send,
-        F: FnOnce(CancellationToken) -> U,
-    >(
-        handle: &tokio::runtime::Handle,
-        cancel_token: CancellationToken,
-        f: F,
-    ) -> Self {
-        let fut = f(cancel_token.clone());
-        Self {
-            worker: Some(handle.spawn(fut)),
-            cancel_token,
-            cancel_on_drop: AtomicBool::new(true),
-        }
-    }
-    pub fn new_blocking<
-        U: 'static + Future<Output = O>,
-        F: 'static + FnOnce(CancellationToken) -> U + Send,
-    >(
-        f: F,
-    ) -> Self {
-        Self::new_blocking_on(&tokio::runtime::Handle::current(), f)
-    }
-    pub fn new_blocking_with_token<
-        U: 'static + Future<Output = O>,
-        F: 'static + FnOnce(CancellationToken) -> U + Send,
-    >(
-        cancel_token: CancellationToken,
-        f: F,
-    ) -> Self {
-        Self::new_blocking_on_with_token(&tokio::runtime::Handle::current(), cancel_token, f)
-    }
-    pub fn new_blocking_on<
-        U: 'static + Future<Output = O>,
-        F: 'static + FnOnce(CancellationToken) -> U + Send,
-    >(
-        handle: &tokio::runtime::Handle,
-        f: F,
-    ) -> Self {
-        Self::new_blocking_on_with_token(handle, CancellationToken::new(), f)
-    }
-    pub fn new_blocking_on_with_token<
-        U: 'static + Future<Output = O>,
-        F: 'static + FnOnce(CancellationToken) -> U + Send,
-    >(
-        handle: &tokio::runtime::Handle,
-        cancel_token: CancellationToken,
-        f: F,
-    ) -> Self {
-        let cancel_token2 = cancel_token.clone();
-        let handle2 = handle.clone();
-        Self {
-            worker: Some(handle.spawn_blocking(move || handle2.block_on(f(cancel_token2)))),
-            cancel_token,
-            cancel_on_drop: AtomicBool::new(true),
-        }
-    }
-}
-
 impl<O: 'static> Worker<O> {
-    pub fn new_local<U: 'static + Future<Output = O>, F: FnOnce(CancellationToken) -> U>(
-        f: F,
-    ) -> Self {
-        Self::new_local_with_token(&CancellationToken::new(), f)
-    }
-    pub fn new_local_with_token<
-        U: 'static + Future<Output = O>,
-        F: FnOnce(CancellationToken) -> U,
-    >(
-        cancel_token: &CancellationToken,
-        f: F,
-    ) -> Self {
-        let cancel_token = cancel_token.child_token();
-        let fut = f(cancel_token.clone());
-        Self {
-            worker: Some(tokio::task::spawn_local(fut)),
-            cancel_token,
-            cancel_on_drop: AtomicBool::new(true),
-        }
-    }
     pub async fn stop(&mut self) -> Option<O> {
         self.cancel_token.cancel();
         if let Some(worker) = self.worker.take() {

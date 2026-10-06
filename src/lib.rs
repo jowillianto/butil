@@ -7,7 +7,7 @@ pub mod keyvec;
 pub mod worker;
 pub use config_loader::ConfigLoader;
 pub use keyvec::{BoundedKeyVec, KeyVec};
-pub use worker::Worker;
+pub use worker::{Worker, WorkerArg};
 
 #[cfg(feature = "js")]
 pub fn get_unix_timestamp_us() -> u64 {

@@ -268,6 +268,7 @@ impl Config {
                 Ok(Actor::new_bounded(
                     ActorConfig {
                         shutdown_action: ShutdownAction::Drain,
+                        ..Default::default()
                     },
                     self.queue_size,
                     Ctx { transport: tp },
@@ -279,6 +280,7 @@ impl Config {
                 Ok(Actor::new_bounded(
                     ActorConfig {
                         shutdown_action: ShutdownAction::Drain,
+                        ..Default::default()
                     },
                     self.queue_size,
                     Ctx { transport: tp },

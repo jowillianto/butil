@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::actor::{Actor, ActorConfig, Context, ShutdownAction};
-use crate::{BoundedKeyVec, Worker, wait_or};
+use crate::{BoundedKeyVec, Worker, WorkerArg, wait_or};
 #[cfg(feature = "cache-redis")]
 use redis::AsyncCommands;
 
@@ -78,14 +78,11 @@ pub struct InMemoryCache {
 }
 
 impl InMemoryCache {
-    pub fn new(
-        max_size: usize,
-        buf_size: usize,
-        refresh_interval: tokio::time::Duration,
-    ) -> Self {
+    pub fn new(max_size: usize, buf_size: usize, refresh_interval: tokio::time::Duration) -> Self {
         let (actor, tx) = Actor::new_bounded(
             ActorConfig {
                 shutdown_action: ShutdownAction::Drain,
+                ..Default::default()
             },
             buf_size,
             CacheCtx {
@@ -93,7 +90,7 @@ impl InMemoryCache {
             },
         );
         let refresh_tx = tx.clone();
-        let refresh_worker = Worker::new(async move |cancel_token| {
+        let refresh_worker = WorkerArg::new(async move |cancel_token| {
             let mut interval = tokio::time::interval(refresh_interval);
             while wait_or(interval.tick(), cancel_token.cancelled())
                 .await
@@ -103,7 +100,8 @@ impl InMemoryCache {
                     break;
                 }
             }
-        });
+        })
+        .spawn();
         Self {
             actor,
             tx,

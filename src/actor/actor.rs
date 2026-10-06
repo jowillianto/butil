@@ -1,13 +1,34 @@
+use atomic_enum::atomic_enum;
+use futures::FutureExt;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
     sync::{Arc, atomic::Ordering},
 };
-
-use atomic_enum::atomic_enum;
 use tokio_util::sync::CancellationToken;
 
-use crate::{Worker, wait_or_option};
+use crate::{Worker, WorkerArg, wait_or_option};
+
+pub enum ActorError<E> {
+    Timeout,
+    Busy,
+    Internal(E),
+}
+
+impl<E: std::error::Error> ActorError<E> {
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, &Self::Timeout)
+    }
+    pub fn is_busy(&self) -> bool {
+        matches!(self, &Self::Busy)
+    }
+    pub fn internal(self) -> Option<E> {
+        match self {
+            Self::Internal(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Oneof
 /// Init -> not started
@@ -138,6 +159,16 @@ pub trait Context<E: Send + 'static>: Send {
 
 pub struct ActorConfig {
     pub shutdown_action: ShutdownAction,
+    pub cancel_token: Option<CancellationToken>,
+}
+
+impl Default for ActorConfig {
+    fn default() -> Self {
+        Self {
+            shutdown_action: ShutdownAction::Drain,
+            cancel_token: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -170,7 +201,6 @@ impl<E: Send + 'static> Actor<E> {
             }
             if should_drain {
                 if config.shutdown_action == ShutdownAction::Drain {
-                    use futures::FutureExt;
                     while let Some(Some(e)) = stream.next().now_or_never() {
                         if !ctx.on_event(e).await {
                             break;
@@ -193,8 +223,13 @@ impl<E: Send + 'static> Actor<E> {
                 status2.shutdown_force();
             }
         };
+        let mut arg = WorkerArg::new(f);
+        if let Some(cancel_token) = config.cancel_token {
+            arg = arg.with_cancel_token(cancel_token);
+        }
+        let worker = arg.spawn();
         Self {
-            worker: tokio::sync::Mutex::new(Worker::new(f)),
+            worker: tokio::sync::Mutex::new(worker),
             status,
             event: std::marker::PhantomData,
         }

@@ -1,8 +1,8 @@
 use super::timed_receiver::TimedReceiver;
 use super::{Actor, ActorConfig, ActorStatusKind, Context};
 use crate::KeyVec;
-use crate::Worker;
 use crate::wait_or;
+use crate::{Worker, WorkerArg};
 
 pub trait Record<Id> {
     type Error;
@@ -115,7 +115,7 @@ impl<Id: Eq + Clone + Send + Sync + 'static> RecordActor<Id> {
     ) -> Self {
         let (actor, tx) = Actor::new_bounded(config, buf_size, RecordState::new(ttl, record));
         let refresh_tx = tx.clone();
-        let refresh_worker = Worker::new(async move |cancel_token| {
+        let refresh_worker = WorkerArg::new(async move |cancel_token| {
             let mut interval = tokio::time::interval(refresh_interval);
             while wait_or(interval.tick(), cancel_token.cancelled())
                 .await
@@ -125,7 +125,8 @@ impl<Id: Eq + Clone + Send + Sync + 'static> RecordActor<Id> {
                     break;
                 }
             }
-        });
+        })
+        .spawn();
         Self {
             actor,
             tx,
