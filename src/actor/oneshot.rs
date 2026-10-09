@@ -1,4 +1,4 @@
-use crate::wait_for;
+use crate::async_utils::wait_for;
 
 pub enum Error {
     Timeout,

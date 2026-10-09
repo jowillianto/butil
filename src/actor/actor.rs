@@ -144,7 +144,7 @@ pub async fn actor_loop<
      */
     status.activate();
     let mut should_drain = true;
-    while let Some(e) = crate::wait_or_option(stream.next(), cancel_token.cancelled()).await {
+    while let Some(e) = crate::async_utils::wait_or_option(stream.next(), cancel_token.cancelled()).await {
         if !lifecyle.on_event(e).await {
             should_drain = false;
             break;
@@ -180,7 +180,7 @@ pub async fn actor_loop<
  * the actor over there.
  */
 pub struct Actor {
-    worker: tokio::sync::Mutex<crate::Worker<()>>,
+    worker: tokio::sync::Mutex<crate::async_utils::Worker<()>>,
     status: ActorStatus,
 }
 
@@ -197,7 +197,7 @@ impl Actor {
         let status = ActorStatus::new();
         let status2 = status.clone();
         let action = config.shutdown_action;
-        let mut arg = crate::WorkerArg::new(async move |cancel_token| {
+        let mut arg = crate::async_utils::WorkerArg::new(async move |cancel_token| {
             actor_loop(action, ctx, stream, status2, cancel_token).await
         });
         if let Some(cancel_token) = config.cancel_token {

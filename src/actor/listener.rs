@@ -2,22 +2,22 @@ use std::sync::{Arc, atomic::AtomicU64};
 
 use super::{ActorConfig, ActorStatusKind};
 use crate::{
-    LinearMap,
     actor::prelude::{HandleEvent, Lifecycle},
-    wait_or,
+    async_utils::wait_or,
+    collections::LinearMap,
 };
 
 enum Event {
     Reg {
         sub_id: u64,
-        worker: crate::Worker<()>,
+        worker: crate::async_utils::Worker<()>,
     },
     Unreg {
         sub_id: u64,
     },
 }
 struct ListenerCtx {
-    subs: LinearMap<u64, crate::Worker<()>>,
+    subs: LinearMap<u64, crate::async_utils::Worker<()>>,
 }
 
 impl ListenerCtx {
@@ -122,7 +122,7 @@ impl<E: 'static + Send + Sync> Mailbox<E> {
             .counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut rx = self.tx.subscribe();
-        let worker = crate::WorkerArg::new(async move |app_token| {
+        let worker = crate::async_utils::WorkerArg::new(async move |app_token| {
             while let Some(e) = wait_or(rx.recv(), app_token.cancelled()).await {
                 match e {
                     Ok(e) => handler.handle_event(e).await,
