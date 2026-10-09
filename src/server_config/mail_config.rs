@@ -1,11 +1,9 @@
-use super::actor::timed_receiver::TimedReceiver;
-use super::actor::{Actor, ActorConfig, Context, ShutdownAction};
+use crate::actor::oneshot::{OneshotReceiver, oneshot};
+use crate::actor::prelude::{ActorCtl, Lifecycle};
+use crate::actor::{Actor, ActorConfig, ActorStatusKind, ShutdownAction};
 use std::collections::HashMap;
 use std::fmt::Display;
 
-/*
- * Error is the normal error kind for mails
- */
 #[derive(Debug)]
 pub struct Error {
     kind: String,
@@ -87,9 +85,6 @@ pub trait ParseMailAck<Ctx> {
     fn parse_mail_ack(&self, ctx: &Ctx) -> Result<Option<String>, Error>;
 }
 
-/*
- * Jjinja template substitution
- */
 pub struct JjinjaCss {
     template: String,
     ack: Option<String>,
@@ -124,9 +119,6 @@ impl JjinjaCss {
 
 impl ParseMail<HashMap<String, String>> for JjinjaCss {
     fn parse_mail(&self, ctx: &HashMap<String, String>) -> Result<String, Error> {
-        /*
-         * substitute environment
-         */
         let mut env = minijinja::Environment::new();
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
         env.render_str(&self.template, ctx).map_err(|e| {
@@ -134,9 +126,6 @@ impl ParseMail<HashMap<String, String>> for JjinjaCss {
                 "check that every variable referenced by the template is present in the context",
             )
         })
-        /*
-         * run tailwind css
-         */
     }
 }
 
@@ -168,9 +157,6 @@ impl JjinjaCssFactory {
     }
 }
 
-/*
- * Mail events constructed via lettre
- */
 pub struct Event {
     msg: lettre::Message,
     tx: tokio::sync::oneshot::Sender<Result<(), Error>>,
@@ -184,58 +170,34 @@ impl Event {
     pub fn new_with_rx(
         msg: lettre::Message,
         dur: tokio::time::Duration,
-    ) -> (Event, TimedReceiver<Result<(), Error>>) {
-        let (tx, rx) = TimedReceiver::new(dur);
+    ) -> (Event, OneshotReceiver<Result<(), Error>>) {
+        let (tx, rx) = oneshot(dur);
         let e = Event { tx, msg };
         (e, rx)
     }
 }
 
-pub struct Ctx<T> {
-    pub transport: T,
-}
-
-impl<T> Context<Event> for Ctx<T>
-where
-    T: lettre::AsyncTransport<Error: std::fmt::Display> + Send + Sync,
-{
-    async fn on_event(&mut self, e: Event) -> bool {
-        let res = self
-            .transport
-            .send(e.msg)
-            .await
-            .map(|_| ())
-            .map_err(|e| Error::new("mail::send", e.to_string()));
-        let _ = e.tx.send(res);
-        true
-    }
-
-    async fn deinit(&mut self) {
-        self.transport.shutdown().await;
-    }
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(tag = "provider", rename_all = "snake_case")]
+enum MailTransportConfig {
+    Smtp {
+        url: String,
+        username: String,
+        password: String,
+    },
+    File {
+        dir: std::path::PathBuf,
+    },
 }
 
 fn default_usize<const N: usize>() -> usize {
     N
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(tag = "provider", rename_all = "snake_case")]
-pub enum TransportConfig {
-    #[cfg(feature = "mail-smtp")]
-    Smtp {
-        url: String,
-        username: String,
-        password: String,
-    },
-    #[cfg(feature = "mail-file")]
-    File { dir: std::path::PathBuf },
-}
-
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct Config {
     #[serde(flatten)]
-    transport: TransportConfig,
+    transport: MailTransportConfig,
     #[serde(default = "default_usize::<2048>")]
     queue_size: usize,
     template_dir: std::path::PathBuf,
@@ -248,13 +210,13 @@ impl Config {
             dir: self.template_dir.clone(),
         }
     }
-    pub fn build(
-        &self,
-    ) -> Result<(Actor<Event>, tokio::sync::mpsc::Sender<Event>), lettre::transport::smtp::Error>
-    {
-        match &self.transport {
-            #[cfg(feature = "mail-smtp")]
-            TransportConfig::Smtp {
+    pub fn create_service(&self) -> Result<MailService, lettre::transport::smtp::Error> {
+        let config = ActorConfig {
+            shutdown_action: ShutdownAction::Drain,
+            ..Default::default()
+        };
+        let (actor, tx) = match &self.transport {
+            MailTransportConfig::Smtp {
                 url,
                 username,
                 password,
@@ -265,27 +227,61 @@ impl Config {
                         password.clone(),
                     ))
                     .build();
-                Ok(Actor::new_bounded(
-                    ActorConfig {
-                        shutdown_action: ShutdownAction::Drain,
-                        ..Default::default()
-                    },
-                    self.queue_size,
-                    Ctx { transport: tp },
-                ))
+                Actor::new_bounded(config, self.queue_size, MailContext { tranport: tp })
             }
-            #[cfg(feature = "mail-file")]
-            TransportConfig::File { dir } => {
+            MailTransportConfig::File { dir } => {
                 let tp = lettre::AsyncFileTransport::<lettre::Tokio1Executor>::new(dir);
-                Ok(Actor::new_bounded(
-                    ActorConfig {
-                        shutdown_action: ShutdownAction::Drain,
-                        ..Default::default()
-                    },
-                    self.queue_size,
-                    Ctx { transport: tp },
-                ))
+                Actor::new_bounded(config, self.queue_size, MailContext { tranport: tp })
             }
-        }
+        };
+        Ok(MailService { actor, tx })
+    }
+}
+
+pub struct MailContext<T: lettre::AsyncTransport + Send + Sync> {
+    tranport: T,
+}
+
+impl<T> Lifecycle<Event> for MailContext<T>
+where
+    T: lettre::AsyncTransport<Error: std::fmt::Display> + Send + Sync,
+{
+    async fn on_event(&mut self, e: Event) -> bool {
+        let res = self
+            .tranport
+            .send(e.msg)
+            .await
+            .map(|_| ())
+            .map_err(|e| Error::new("mail::send", e.to_string()));
+        let _ = e.tx.send(res);
+        true
+    }
+
+    async fn deinit(&mut self) {
+        self.tranport.shutdown().await;
+    }
+}
+
+pub struct MailService {
+    actor: Actor,
+    tx: tokio::sync::mpsc::Sender<Event>,
+}
+
+impl MailService {
+    pub fn mailbox(&self) -> tokio::sync::mpsc::Sender<Event> {
+        self.tx.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ActorCtl for MailService {
+    fn status(&self) -> ActorStatusKind {
+        self.actor.status()
+    }
+    async fn stop(&self) {
+        self.actor.stop().await;
+    }
+    async fn wait(&self) {
+        self.actor.wait().await;
     }
 }

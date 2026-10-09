@@ -1,38 +1,7 @@
-use atomic_enum::atomic_enum;
-use futures::FutureExt;
-use std::{
-    any::{Any, TypeId},
-    collections::HashMap,
-    sync::{Arc, atomic::Ordering},
-};
+use crate::actor::prelude::Lifecycle;
+use std::sync::Arc;
+use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
-
-use crate::{Worker, WorkerArg, wait_or_option};
-
-/// covers three error types:
-/// Gone -> if the actor is gone, i.e. not running
-/// Busy -> actor is fully packed
-/// Internal -> actor error
-pub enum ActorError<E> {
-    Gone,
-    Busy,
-    Internal(E),
-}
-
-impl<E: std::error::Error> ActorError<E> {
-    pub fn is_gone(&self) -> bool {
-        matches!(self, &Self::Gone)
-    }
-    pub fn is_busy(&self) -> bool {
-        matches!(self, &Self::Busy)
-    }
-    pub fn internal(self) -> Option<E> {
-        match self {
-            Self::Internal(e) => Some(e),
-            _ => None,
-        }
-    }
-}
 
 /// Oneof
 /// Init -> not started
@@ -40,7 +9,7 @@ impl<E: std::error::Error> ActorError<E> {
 /// Stopping -> a stop command have been issued but have not stopped
 /// ShutdownGraceful -> gracefully shutdown
 /// ShutdownForce -> forcefully shutdown
-#[atomic_enum]
+#[atomic_enum::atomic_enum]
 #[derive(PartialEq, Eq)]
 pub enum ActorStatusKind {
     Init,
@@ -65,7 +34,7 @@ impl ActorStatus {
 
     /// get the current phase
     pub fn phase(&self) -> ActorStatusKind {
-        self.inner.load(Ordering::Acquire)
+        self.inner.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// make the actor status active
@@ -73,8 +42,8 @@ impl ActorStatus {
         let _ = self.inner.compare_exchange(
             ActorStatusKind::Init,
             ActorStatusKind::Active,
-            Ordering::AcqRel,
-            Ordering::Acquire,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
         );
     }
 
@@ -83,8 +52,8 @@ impl ActorStatus {
         let _ = self.inner.compare_exchange(
             ActorStatusKind::Active,
             ActorStatusKind::Stopping,
-            Ordering::AcqRel,
-            Ordering::Acquire,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
         );
     }
 
@@ -97,8 +66,8 @@ impl ActorStatus {
             .compare_exchange_weak(
                 current,
                 ActorStatusKind::ShutdownGraceful,
-                Ordering::AcqRel,
-                Ordering::Acquire,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
             )
             .is_ok()
         {
@@ -119,8 +88,8 @@ impl ActorStatus {
             .compare_exchange_weak(
                 current,
                 ActorStatusKind::ShutdownForce,
-                Ordering::AcqRel,
-                Ordering::Acquire,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
             )
             .is_ok()
         {
@@ -141,26 +110,6 @@ pub enum ShutdownAction {
     Wait,  /* Handles events until Context::is_complete is true */
 }
 
-pub trait Context<E: Send + 'static>: Send {
-    fn init(&mut self) -> impl Send + Future<Output = ()> {
-        async {}
-    }
-    /* Return `true` to keep the loop running; `false` to terminate (deinit
-     * still runs afterwards). */
-    fn on_event(&mut self, e: E) -> impl Send + Future<Output = bool> {
-        async {
-            let _ = e;
-            true
-        }
-    }
-    fn deinit(&mut self) -> impl Send + Future<Output = ()> {
-        async {}
-    }
-    fn is_complete(&self) -> bool {
-        true
-    }
-}
-
 pub struct ActorConfig {
     pub shutdown_action: ShutdownAction,
     pub cancel_token: Option<CancellationToken>,
@@ -175,83 +124,99 @@ impl Default for ActorConfig {
     }
 }
 
-#[derive(Debug)]
-pub struct Actor<E: Send + 'static> {
-    worker: tokio::sync::Mutex<Worker<()>>,
+pub async fn actor_loop<
+    E: 'static + Send,
+    L: Lifecycle<E>,
+    S: tokio_stream::Stream<Item = E> + Unpin,
+>(
+    action: ShutdownAction,
+    mut lifecyle: L,
+    mut stream: S,
     status: ActorStatus,
-    event: std::marker::PhantomData<E>,
-}
-
-impl<E: Send + 'static> Actor<E> {
-    pub fn new<C, S>(config: ActorConfig, ctx: C, stream: S) -> Self
-    where
-        C: 'static + Context<E> + Send,
-        S: 'static + tokio_stream::Stream<Item = E> + Send + Unpin,
-    {
-        use tokio_stream::StreamExt;
-        let mut ctx = ctx;
-        let mut stream = stream;
-        let status = ActorStatus::new();
-        let status2 = status.clone();
-        let f = async move |cancel_token: CancellationToken| {
-            ctx.init().await;
-            status2.activate();
-            let mut should_drain = true;
-            while let Some(e) = wait_or_option(stream.next(), cancel_token.cancelled()).await {
-                if !ctx.on_event(e).await {
-                    should_drain = false;
+    cancel_token: CancellationToken,
+) {
+    /*
+     * Lifecycle init
+     */
+    lifecyle.init().await;
+    /*
+     * Lifecycle run
+     */
+    status.activate();
+    let mut should_drain = true;
+    while let Some(e) = crate::wait_or_option(stream.next(), cancel_token.cancelled()).await {
+        if !lifecyle.on_event(e).await {
+            should_drain = false;
+            break;
+        }
+    }
+    if should_drain {
+        if action == ShutdownAction::Drain {
+            while let Some(Some(e)) = futures::FutureExt::now_or_never(stream.next()) {
+                if !lifecyle.on_event(e).await {
                     break;
                 }
             }
-            if should_drain {
-                if config.shutdown_action == ShutdownAction::Drain {
-                    while let Some(Some(e)) = stream.next().now_or_never() {
-                        if !ctx.on_event(e).await {
-                            break;
-                        }
-                    }
-                } else if config.shutdown_action == ShutdownAction::Wait {
-                    while !ctx.is_complete()
-                        && let Some(e) = stream.next().await
-                    {
-                        if !ctx.on_event(e).await {
-                            break;
-                        }
-                    }
+        } else if action == ShutdownAction::Wait {
+            while !lifecyle.is_complete()
+                && let Some(e) = stream.next().await
+            {
+                if !lifecyle.on_event(e).await {
+                    break;
                 }
             }
-            ctx.deinit().await;
-            if ctx.is_complete() {
-                status2.shutdown_graceful();
-            } else {
-                status2.shutdown_force();
-            }
-        };
-        let mut arg = WorkerArg::new(f);
+        }
+    }
+    lifecyle.deinit().await;
+    if lifecyle.is_complete() {
+        status.shutdown_graceful();
+    } else {
+        status.shutdown_force();
+    }
+}
+
+/*
+ * Actors should be accompanied by their mailboxes, so add a mailbox associated with
+ * the actor over there.
+ */
+pub struct Actor {
+    worker: tokio::sync::Mutex<crate::Worker<()>>,
+    status: ActorStatus,
+}
+
+impl Actor {
+    pub fn new<
+        E: 'static + Send,
+        L: 'static + Send + Lifecycle<E>,
+        S: 'static + tokio_stream::Stream<Item = E> + Send + Unpin,
+    >(
+        config: ActorConfig,
+        ctx: L,
+        stream: S,
+    ) -> Self {
+        let status = ActorStatus::new();
+        let status2 = status.clone();
+        let action = config.shutdown_action;
+        let mut arg = crate::WorkerArg::new(async move |cancel_token| {
+            actor_loop(action, ctx, stream, status2, cancel_token).await
+        });
         if let Some(cancel_token) = config.cancel_token {
             arg = arg.with_cancel_token(cancel_token);
         }
-        let worker = arg.spawn();
         Self {
-            worker: tokio::sync::Mutex::new(worker),
+            worker: tokio::sync::Mutex::new(arg.spawn()),
             status,
-            event: std::marker::PhantomData,
         }
     }
-
-    pub fn new_bounded<C>(
+    pub fn new_bounded<E: 'static + Send, L: 'static + Send + Lifecycle<E>>(
         config: ActorConfig,
         buf_size: usize,
-        ctx: C,
-    ) -> (Self, tokio::sync::mpsc::Sender<E>)
-    where
-        C: 'static + Context<E>,
-    {
+        ctx: L,
+    ) -> (Self, tokio::sync::mpsc::Sender<E>) {
         let (tx, rx) = tokio::sync::mpsc::channel::<E>(buf_size);
         let actor = Self::new(config, ctx, tokio_stream::wrappers::ReceiverStream::new(rx));
         (actor, tx)
     }
-
     pub async fn stop(&self) {
         self.status.stop();
         self.worker.lock().await.cancel();
@@ -261,129 +226,5 @@ impl<E: Send + 'static> Actor<E> {
     }
     pub fn status(&self) -> ActorStatusKind {
         self.status.phase()
-    }
-}
-unsafe impl<E: Send + 'static> Sync for Actor<E> {}
-
-pub trait ActorInfo: Send + Sync {
-    const NAME: &'static str;
-    fn status(&self) -> ActorStatusKind;
-}
-
-#[async_trait::async_trait]
-impl<E: Send + Sync + 'static> ActorCtl for Actor<E> {
-    async fn stop(&self) {
-        Actor::stop(self).await;
-    }
-    async fn wait(&self) {
-        Actor::wait(self).await;
-    }
-}
-
-#[async_trait::async_trait]
-pub trait ActorCtl: Send + Sync {
-    async fn stop(&self);
-    async fn wait(&self);
-    async fn shutdown_and_wait(&self) {
-        self.stop().await;
-        self.wait().await;
-    }
-}
-
-/// Everything the registry needs out of one actor, held as a single trait object.
-/// `ActorInfo` carries an associated const so it cannot be a supertrait here.
-pub trait ActorHandle: ActorCtl + Any {
-    fn status(&self) -> ActorStatusKind;
-}
-
-impl<T: ActorInfo + ActorCtl + Any> ActorHandle for T {
-    fn status(&self) -> ActorStatusKind {
-        ActorInfo::status(self)
-    }
-}
-
-pub struct ActorRegistryEntry {
-    name: &'static str,
-    handle: Arc<dyn ActorHandle>,
-}
-
-pub struct ActorRegistry {
-    inner: HashMap<TypeId, ActorRegistryEntry>,
-}
-
-impl ActorRegistry {
-    pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
-    /// Registers an actor under its own type, handing it back when the type is taken.
-    pub fn register<T: ActorInfo + ActorCtl + Any>(&mut self, a: T) -> Option<T> {
-        if self.inner.contains_key(&TypeId::of::<T>()) {
-            return Some(a);
-        }
-        self.inner.insert(
-            TypeId::of::<T>(),
-            ActorRegistryEntry {
-                name: T::NAME,
-                handle: Arc::new(a),
-            },
-        );
-        None
-    }
-    /// The actor registered under the type, `None` when it is absent.
-    pub fn get_option<T: Any + ActorInfo + ActorCtl>(&self) -> Option<&T> {
-        self.inner
-            .get(&TypeId::of::<T>())
-            .and_then(|entry| (entry.handle.as_ref() as &dyn Any).downcast_ref::<T>())
-    }
-    /// Every registered actor, in no particular order.
-    pub fn iter(&self) -> impl Iterator<Item = &dyn ActorHandle> {
-        self.inner.values().map(|entry| entry.handle.as_ref())
-    }
-    pub fn get<T: Any + ActorInfo + ActorCtl>(&self) -> &T {
-        self.get_option::<T>()
-            .unwrap_or_else(|| panic!("actor '{}' is not registered", T::NAME))
-    }
-    pub async fn stop<T: Any>(&self) -> bool {
-        let Some(entry) = self.inner.get(&TypeId::of::<T>()) else {
-            return false;
-        };
-        entry.handle.stop().await;
-        true
-    }
-    pub async fn wait<T: Any>(&self) -> bool {
-        let Some(entry) = self.inner.get(&TypeId::of::<T>()) else {
-            return false;
-        };
-        entry.handle.wait().await;
-        true
-    }
-    /// Stops the actor and waits for it, `false` when the type is absent.
-    pub async fn shutdown_and_wait<T: Any>(&self) -> bool {
-        let Some(entry) = self.inner.get(&TypeId::of::<T>()) else {
-            return false;
-        };
-        entry.handle.shutdown_and_wait().await;
-        true
-    }
-    /// Every registered type name with its current phase.
-    pub fn list(&self) -> Vec<(&'static str, ActorStatusKind)> {
-        self.inner
-            .values()
-            .map(|entry| (entry.name, entry.handle.status()))
-            .collect()
-    }
-    pub async fn info<T: Any>(&self) -> ActorStatusKind {
-        match self.inner.get(&TypeId::of::<T>()) {
-            Some(entry) => entry.handle.status(),
-            None => ActorStatusKind::ShutdownForce,
-        }
-    }
-}
-
-impl Default for ActorRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }

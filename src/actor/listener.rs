@@ -1,173 +1,93 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64};
 
-use super::actor::{Actor, ActorConfig, ActorStatusKind, Context};
-use super::timed_receiver::TimedReceiver;
-use crate::KeyVec;
+use super::{ActorConfig, ActorStatusKind};
+use crate::{
+    LinearMap,
+    actor::prelude::{HandleEvent, Lifecycle},
+    wait_or,
+};
 
-pub trait ActorSender<M: Send + 'static>: Send + Sync {
-    fn send(&self, e: M);
-}
-
-impl<M: Send + 'static> ActorSender<M> for tokio::sync::mpsc::Sender<M> {
-    fn send(&self, e: M) {
-        let _ = tokio::sync::mpsc::Sender::try_send(self, e);
-    }
-}
-
-pub enum ListenerEvent<E: Send + Sync + 'static> {
+enum Event {
     Reg {
-        id: usize,
-        tx: Arc<dyn ActorSender<Arc<E>>>,
+        sub_id: u64,
+        worker: crate::Worker<()>,
     },
     Unreg {
-        id: usize,
-    },
-    Notify {
-        event: Arc<E>,
-    },
-    Len {
-        tx: tokio::sync::oneshot::Sender<usize>,
+        sub_id: u64,
     },
 }
-
-impl<E: Send + Sync + 'static> ListenerEvent<E> {
-    pub fn reg(tx: impl 'static + ActorSender<Arc<E>>) -> (Self, usize) {
-        let tx = Arc::new(tx) as Arc<dyn ActorSender<Arc<E>>>;
-        let id = (tx.as_ref() as *const dyn ActorSender<Arc<E>>).addr();
-        (Self::Reg { id, tx }, id)
-    }
-    pub fn unreg(id: usize) -> Self {
-        Self::Unreg { id }
-    }
-    pub fn len(timeout: tokio::time::Duration) -> (Self, TimedReceiver<usize>) {
-        let (tx, rx) = TimedReceiver::new(timeout);
-        (Self::Len { tx: tx }, rx)
-    }
-    pub fn notify(event: E) -> Self {
-        Self::Notify {
-            event: Arc::new(event),
-        }
-    }
+struct ListenerCtx {
+    subs: LinearMap<u64, crate::Worker<()>>,
 }
 
-impl<E: Send + Sync + 'static> std::fmt::Debug for ListenerEvent<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reg { id, .. } => f.debug_struct("Reg").field("id", id).finish(),
-            Self::Unreg { id } => f.debug_struct("Unreg").field("id", id).finish(),
-            Self::Notify { .. } => f.debug_struct("Notify").finish(),
-            Self::Len { .. } => f.debug_struct("Len").finish(),
-        }
-    }
-}
-
-pub struct ListenerMailbox<E: Send + Sync + 'static> {
-    tx: tokio::sync::mpsc::Sender<ListenerEvent<E>>,
-    timeout: tokio::time::Duration,
-}
-
-impl<E: Send + Sync + 'static> Clone for ListenerMailbox<E> {
-    fn clone(&self) -> Self {
+impl ListenerCtx {
+    fn new() -> Self {
         Self {
-            tx: self.tx.clone(),
-            timeout: self.timeout,
+            subs: LinearMap::default(),
         }
     }
 }
 
-impl<E: Send + Sync + 'static> ListenerMailbox<E> {
-    pub fn new(
-        tx: tokio::sync::mpsc::Sender<ListenerEvent<E>>,
-        timeout: tokio::time::Duration,
-    ) -> Self {
-        Self { tx, timeout }
-    }
-    pub fn tx(&self) -> tokio::sync::mpsc::Sender<ListenerEvent<E>> {
-        self.tx.clone()
-    }
-    pub async fn notify(&self, event: E) -> bool {
-        self.tx.send(ListenerEvent::notify(event)).await.is_ok()
-    }
-    pub async fn reg(&self, tx: impl 'static + ActorSender<Arc<E>>) -> Option<usize> {
-        let (e, id) = ListenerEvent::reg(tx);
-        self.tx.send(e).await.ok().map(|_| id)
-    }
-    pub async fn unreg(&self, id: usize) -> bool {
-        self.tx.send(ListenerEvent::unreg(id)).await.is_ok()
-    }
-    pub async fn len(&self) -> Option<usize> {
-        let (e, rx) = ListenerEvent::len(self.timeout);
-        self.tx.send(e).await.ok()?;
-        rx.recv().await.ok()
-    }
-}
-
-pub struct ListenerCtx<E: Send + Sync + 'static> {
-    listeners: KeyVec<usize, Arc<dyn ActorSender<Arc<E>>>>,
-}
-
-impl<E: Send + Sync + 'static> ListenerCtx<E> {
-    pub fn new() -> Self {
-        Self {
-            listeners: KeyVec::default(),
-        }
-    }
-}
-
-impl<E: Send + Sync + 'static> Default for ListenerCtx<E> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<E: Send + Sync + 'static> Context<ListenerEvent<E>> for ListenerCtx<E> {
-    async fn init(&mut self) {}
-
-    async fn on_event(&mut self, e: ListenerEvent<E>) -> bool {
+impl Lifecycle<Event> for ListenerCtx {
+    async fn on_event(&mut self, e: Event) -> bool {
         match e {
-            ListenerEvent::Reg { id, tx } => {
-                self.listeners.insert_no_check(id, tx);
-                true
+            Event::Reg { sub_id, worker } => {
+                self.subs.insert_no_check(sub_id, worker);
             }
-            ListenerEvent::Unreg { id } => {
-                self.listeners.remove(&id);
-                true
-            }
-            ListenerEvent::Notify { event } => {
-                for (_, tx) in self.listeners.iter() {
-                    tx.send(event.clone());
-                }
-                true
-            }
-            ListenerEvent::Len { tx } => {
-                let _ = tx.send(self.listeners.len());
-                true
+            Event::Unreg { sub_id } => {
+                self.subs.remove(&sub_id);
             }
         }
+        true
     }
-
-    async fn deinit(&mut self) {}
 
     fn is_complete(&self) -> bool {
         false
     }
 }
 
-pub struct ListenerActor<E: Send + Sync + 'static> {
-    actor: Actor<ListenerEvent<E>>,
-    mailbox: ListenerMailbox<E>,
+pub struct SubId {
+    id: u64,
+    act_tx: tokio::sync::mpsc::Sender<Event>,
 }
 
-impl<E: Send + Sync + 'static> ListenerActor<E> {
-    pub fn new(config: ActorConfig, buf_size: usize, timeout: tokio::time::Duration) -> Self {
-        let (actor, tx) = Actor::new_bounded(config, buf_size, ListenerCtx::new());
+impl SubId {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+impl Drop for SubId {
+    fn drop(&mut self) {
+        let _ = self.act_tx.try_send(Event::Unreg { sub_id: self.id });
+    }
+}
+
+pub struct Actor<E: 'static + Send + Sync> {
+    actor: super::actor::Actor,
+    act_tx: tokio::sync::mpsc::Sender<Event>,
+    tx: tokio::sync::broadcast::Sender<Arc<E>>,
+    counter: Arc<AtomicU64>,
+}
+
+impl<E: 'static + Send + Sync> Actor<E> {
+    pub fn new(config: ActorConfig, buf_size: usize) -> Self {
+        let (actor, act_tx) =
+            super::actor::Actor::new_bounded(config, buf_size, ListenerCtx::new());
+        let (tx, _) = tokio::sync::broadcast::channel(buf_size);
         Self {
             actor,
-            mailbox: ListenerMailbox::new(tx, timeout),
+            act_tx,
+            tx,
+            counter: Arc::new(AtomicU64::new(0)),
         }
     }
-    pub fn mailbox(&self) -> ListenerMailbox<E> {
-        self.mailbox.clone()
+    pub fn mailbox(&self) -> Mailbox<E> {
+        Mailbox {
+            tx: self.tx.clone(),
+            act_tx: self.act_tx.clone(),
+            counter: self.counter.clone(),
+        }
     }
     pub async fn stop(&self) {
         self.actor.stop().await;
@@ -177,5 +97,53 @@ impl<E: Send + Sync + 'static> ListenerActor<E> {
     }
     pub fn status(&self) -> ActorStatusKind {
         self.actor.status()
+    }
+}
+
+pub struct Mailbox<E: 'static + Send + Sync> {
+    tx: tokio::sync::broadcast::Sender<Arc<E>>,
+    act_tx: tokio::sync::mpsc::Sender<Event>,
+    counter: Arc<AtomicU64>,
+}
+
+impl<E: 'static + Send + Sync> Clone for Mailbox<E> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            act_tx: self.act_tx.clone(),
+            counter: self.counter.clone(),
+        }
+    }
+}
+
+impl<E: 'static + Send + Sync> Mailbox<E> {
+    pub async fn sub<H: 'static + HandleEvent<Arc<E>>>(&self, mut handler: H) -> SubId {
+        let sub_id = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut rx = self.tx.subscribe();
+        let worker = crate::WorkerArg::new(async move |app_token| {
+            while let Some(e) = wait_or(rx.recv(), app_token.cancelled()).await {
+                match e {
+                    Ok(e) => handler.handle_event(e).await,
+                    Err(e) => match e {
+                        tokio::sync::broadcast::error::RecvError::Closed => break,
+                        tokio::sync::broadcast::error::RecvError::Lagged(_) => continue,
+                    },
+                }
+            }
+        })
+        .spawn();
+        let _ = self.act_tx.send(Event::Reg { sub_id, worker }).await;
+        SubId {
+            id: sub_id,
+            act_tx: self.act_tx.clone(),
+        }
+    }
+    pub async fn unsub(&self, sub_id: u64) -> bool {
+        self.act_tx.send(Event::Unreg { sub_id }).await.is_ok()
+    }
+    pub fn notify(&self, e: E) -> bool {
+        self.tx.send(Arc::new(e)).is_ok()
     }
 }

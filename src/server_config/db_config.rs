@@ -1,16 +1,16 @@
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "provider", rename_all = "snake_case")]
 enum Provider {
-    #[cfg(feature = "db-pg")]
     Postgres {
         host: String,
         username: String,
         password: String,
         name: String,
     },
-    #[cfg(feature = "db-sqlite")]
-    Sqlite { file: String, mode: String },
-    #[cfg(feature = "db-sqlite")]
+    Sqlite {
+        file: String,
+        mode: String,
+    },
     InMemory {},
 }
 
