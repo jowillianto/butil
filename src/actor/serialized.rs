@@ -29,7 +29,7 @@ pub trait ToSerializable {
 
 pub trait SendSerialized<S> {
     type E;
-    fn send_serialized(&self, s: S) -> impl Send + Future<Output = Result<S, Self::E>>;
+    fn send_serialized(&self, s: S) -> impl Send + Future<Output = Result<(), Self::E>>;
 }
 
 enum Event<Req: GetId, Res: GetId, E> {
