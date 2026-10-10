@@ -4,21 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use super::actor::{Actor, ActorStatusKind};
+use super::actor::ActorStatusKind;
 use super::prelude::{ActorCtl, GetMailbox};
-
-#[async_trait::async_trait]
-impl ActorCtl for Actor {
-    fn status(&self) -> ActorStatusKind {
-        Actor::status(self)
-    }
-    async fn stop(&self) {
-        Actor::stop(self).await;
-    }
-    async fn wait(&self) {
-        Actor::wait(self).await;
-    }
-}
 
 pub struct ActorRegistry {
     inner: HashMap<TypeId, Arc<dyn ActorCtl>>,

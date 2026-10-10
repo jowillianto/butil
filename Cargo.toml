@@ -8,23 +8,24 @@ name = "butil"
 path = "src/lib.rs"
 
 [dependencies]
-serde = { version = "1.0.229", features = ["derive"] }
-async-trait = { version = "0.1.91" }
-tokio-util = { version = "0.7.19" }
-tokio = { version = "1.53.1", features = ["sync", "rt", "macros", "time"] }
-tokio-stream = { version = "0.1" }
-futures = "0.3"
-atomic_enum = "0.3.0"
-prost = "0.14"
+serde = { version = "1.0.229", features = ["derive"], optional = true }
+async-trait = { version = "0.1.91", optional = true }
+tokio-util = { version = "0.7.19", optional = true }
+tokio = { version = "1.53.1", features = ["sync", "rt", "macros", "time"], optional = true }
+tokio-stream = { version = "0.1", optional = true }
+futures = { version = "0.3", optional = true }
+atomic_enum = { version = "0.3.0", optional = true }
+prost = { version = "0.14", optional = true }
 chrono = { version = "0.4", optional = true }
-minijinja = { version = "2" }
+uuid = { version = "1.24.0", features = ["v4", "serde"], optional = true }
+minijinja = { version = "2", optional = true }
 toml = { version = "1.1.4", optional = true }
 sea-orm = { version = "2.0.1", features = ["sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls"], optional = true }
 lettre = { version = "0.11.23", default-features = false, features = ["tokio1-rustls", "builder", "smtp-transport", "rustls-native-certs", "aws-lc-rs", "file-transport"], optional = true }
 
 [features]
 default = []
-actor = ["async-utils", "collections", "dep:chrono"]
-server-config = ["actor", "dep:sea-orm", "dep:lettre", "dep:toml", "tokio/fs"]
-async-utils = []
-collections = []
+async-utils = ["dep:tokio", "dep:tokio-util"]
+collections = ["dep:serde", "dep:prost"]
+actor = ["async-utils", "collections", "dep:async-trait", "dep:tokio-stream", "dep:futures", "dep:atomic_enum", "dep:chrono", "dep:uuid"]
+server-config = ["actor", "dep:serde", "dep:minijinja", "dep:sea-orm", "dep:lettre", "dep:toml", "tokio/fs"]

@@ -1,8 +1,8 @@
 use std::sync::{Arc, atomic::AtomicU64};
 
-use super::{ActorConfig, ActorStatusKind};
+use super::{ActorArg, ActorStatus, ActorStatusKind};
 use crate::{
-    actor::prelude::{HandleEvent, Lifecycle},
+    actor::prelude::{GetMailbox, HandleEvent, Lifecycle},
     async_utils::wait_or,
     collections::LinearMap,
 };
@@ -64,19 +64,24 @@ impl Drop for SubId {
 }
 
 pub struct Actor<E: 'static + Send + Sync> {
-    actor: super::actor::Actor,
+    worker: tokio::sync::Mutex<crate::async_utils::Worker<()>>,
+    status: ActorStatus,
     act_tx: tokio::sync::mpsc::Sender<Event>,
     tx: tokio::sync::broadcast::Sender<Arc<E>>,
     counter: Arc<AtomicU64>,
 }
 
 impl<E: 'static + Send + Sync> Actor<E> {
-    pub fn new(config: ActorConfig, buf_size: usize) -> Self {
-        let (actor, act_tx) =
-            super::actor::Actor::new_bounded(config, buf_size, ListenerCtx::new());
+    pub fn new(config: ActorArg, buf_size: usize) -> Self {
+        let (act_tx, act_rx) = tokio::sync::mpsc::channel(buf_size);
+        let (worker, status) = config.run_with_lifecycle(
+            ListenerCtx::new(),
+            tokio_stream::wrappers::ReceiverStream::new(act_rx),
+        );
         let (tx, _) = tokio::sync::broadcast::channel(buf_size);
         Self {
-            actor,
+            worker: tokio::sync::Mutex::new(worker),
+            status,
             act_tx,
             tx,
             counter: Arc::new(AtomicU64::new(0)),
@@ -90,13 +95,21 @@ impl<E: 'static + Send + Sync> Actor<E> {
         }
     }
     pub async fn stop(&self) {
-        self.actor.stop().await;
+        self.status.stop();
+        self.worker.lock().await.cancel();
     }
     pub async fn wait(&self) {
-        self.actor.wait().await;
+        self.worker.lock().await.wait().await;
     }
     pub fn status(&self) -> ActorStatusKind {
-        self.actor.status()
+        self.status.phase()
+    }
+}
+
+impl<E: 'static + Send + Sync> GetMailbox for Actor<E> {
+    type M = Mailbox<E>;
+    fn get_mailbox(&self) -> Self::M {
+        self.mailbox()
     }
 }
 

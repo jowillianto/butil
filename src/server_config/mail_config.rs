@@ -1,6 +1,6 @@
 use crate::actor::oneshot::{OneshotReceiver, oneshot};
-use crate::actor::prelude::{ActorCtl, Lifecycle};
-use crate::actor::{Actor, ActorConfig, ActorStatusKind, ShutdownAction};
+use crate::actor::prelude::{ActorCtl, GetMailbox, Lifecycle};
+use crate::actor::{ActorArg, ActorStatus, ActorStatusKind, ShutdownAction};
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -211,11 +211,13 @@ impl Config {
         }
     }
     pub fn create_service(&self) -> Result<MailService, lettre::transport::smtp::Error> {
-        let config = ActorConfig {
+        let config = ActorArg {
             shutdown_action: ShutdownAction::Drain,
             ..Default::default()
         };
-        let (actor, tx) = match &self.transport {
+        let (tx, rx) = tokio::sync::mpsc::channel(self.queue_size);
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let (worker, status) = match &self.transport {
             MailTransportConfig::Smtp {
                 url,
                 username,
@@ -227,14 +229,18 @@ impl Config {
                         password.clone(),
                     ))
                     .build();
-                Actor::new_bounded(config, self.queue_size, MailContext { tranport: tp })
+                config.run_with_lifecycle(MailContext { tranport: tp }, stream)
             }
             MailTransportConfig::File { dir } => {
                 let tp = lettre::AsyncFileTransport::<lettre::Tokio1Executor>::new(dir);
-                Actor::new_bounded(config, self.queue_size, MailContext { tranport: tp })
+                config.run_with_lifecycle(MailContext { tranport: tp }, stream)
             }
         };
-        Ok(MailService { actor, tx })
+        Ok(MailService {
+            worker: tokio::sync::Mutex::new(worker),
+            status,
+            tx,
+        })
     }
 }
 
@@ -263,7 +269,8 @@ where
 }
 
 pub struct MailService {
-    actor: Actor,
+    worker: tokio::sync::Mutex<crate::async_utils::Worker<()>>,
+    status: ActorStatus,
     tx: tokio::sync::mpsc::Sender<Event>,
 }
 
@@ -273,15 +280,23 @@ impl MailService {
     }
 }
 
+impl GetMailbox for MailService {
+    type M = tokio::sync::mpsc::Sender<Event>;
+    fn get_mailbox(&self) -> Self::M {
+        self.tx.clone()
+    }
+}
+
 #[async_trait::async_trait]
 impl ActorCtl for MailService {
     fn status(&self) -> ActorStatusKind {
-        self.actor.status()
+        self.status.phase()
     }
     async fn stop(&self) {
-        self.actor.stop().await;
+        self.status.stop();
+        self.worker.lock().await.cancel();
     }
     async fn wait(&self) {
-        self.actor.wait().await;
+        self.worker.lock().await.wait().await;
     }
 }

@@ -70,3 +70,7 @@ pub trait GetMailbox {
     type M: Clone;
     fn get_mailbox(&self) -> Self::M;
 }
+
+pub trait ToSerializable {
+    type Raw;
+}

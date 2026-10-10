@@ -1,4 +1,4 @@
-use crate::actor::prelude::Lifecycle;
+use crate::{actor::prelude::Lifecycle, async_utils::Worker};
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -110,12 +110,12 @@ pub enum ShutdownAction {
     Wait,  /* Handles events until Context::is_complete is true */
 }
 
-pub struct ActorConfig {
+pub struct ActorArg {
     pub shutdown_action: ShutdownAction,
     pub cancel_token: Option<CancellationToken>,
 }
 
-impl Default for ActorConfig {
+impl Default for ActorArg {
     fn default() -> Self {
         Self {
             shutdown_action: ShutdownAction::Drain,
@@ -124,7 +124,7 @@ impl Default for ActorConfig {
     }
 }
 
-pub async fn actor_loop<
+async fn actor_loop<
     E: 'static + Send,
     L: Lifecycle<E>,
     S: tokio_stream::Stream<Item = E> + Unpin,
@@ -144,7 +144,9 @@ pub async fn actor_loop<
      */
     status.activate();
     let mut should_drain = true;
-    while let Some(e) = crate::async_utils::wait_or_option(stream.next(), cancel_token.cancelled()).await {
+    while let Some(e) =
+        crate::async_utils::wait_or_option(stream.next(), cancel_token.cancelled()).await
+    {
         if !lifecyle.on_event(e).await {
             should_drain = false;
             break;
@@ -174,57 +176,25 @@ pub async fn actor_loop<
         status.shutdown_force();
     }
 }
-
-/*
- * Actors should be accompanied by their mailboxes, so add a mailbox associated with
- * the actor over there.
- */
-pub struct Actor {
-    worker: tokio::sync::Mutex<crate::async_utils::Worker<()>>,
-    status: ActorStatus,
-}
-
-impl Actor {
-    pub fn new<
+impl ActorArg {
+    pub fn run_with_lifecycle<
         E: 'static + Send,
-        L: 'static + Send + Lifecycle<E>,
-        S: 'static + tokio_stream::Stream<Item = E> + Send + Unpin,
+        L: 'static + Lifecycle<E>,
+        S: 'static + Send + Unpin + tokio_stream::Stream<Item = E>,
     >(
-        config: ActorConfig,
-        ctx: L,
+        self,
+        lifecyle: L,
         stream: S,
-    ) -> Self {
+    ) -> (Worker<()>, ActorStatus) {
         let status = ActorStatus::new();
         let status2 = status.clone();
-        let action = config.shutdown_action;
+        let action = self.shutdown_action;
         let mut arg = crate::async_utils::WorkerArg::new(async move |cancel_token| {
-            actor_loop(action, ctx, stream, status2, cancel_token).await
+            actor_loop(action, lifecyle, stream, status2, cancel_token).await
         });
-        if let Some(cancel_token) = config.cancel_token {
+        if let Some(cancel_token) = self.cancel_token {
             arg = arg.with_cancel_token(cancel_token);
         }
-        Self {
-            worker: tokio::sync::Mutex::new(arg.spawn()),
-            status,
-        }
-    }
-    pub fn new_bounded<E: 'static + Send, L: 'static + Send + Lifecycle<E>>(
-        config: ActorConfig,
-        buf_size: usize,
-        ctx: L,
-    ) -> (Self, tokio::sync::mpsc::Sender<E>) {
-        let (tx, rx) = tokio::sync::mpsc::channel::<E>(buf_size);
-        let actor = Self::new(config, ctx, tokio_stream::wrappers::ReceiverStream::new(rx));
-        (actor, tx)
-    }
-    pub async fn stop(&self) {
-        self.status.stop();
-        self.worker.lock().await.cancel();
-    }
-    pub async fn wait(&self) {
-        self.worker.lock().await.wait().await;
-    }
-    pub fn status(&self) -> ActorStatusKind {
-        self.status.phase()
+        (arg.spawn(), status)
     }
 }
