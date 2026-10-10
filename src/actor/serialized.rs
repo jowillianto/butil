@@ -169,7 +169,7 @@ impl<
         sender: T,
         generator: G,
     ) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel(buf_size)
+        let (tx, rx) = tokio::sync::mpsc::channel(buf_size);
         let (worker, status) = config.run_with_lifecycle(
             Context {
                 pending_requests: BoundedMap::new(max_pending),
