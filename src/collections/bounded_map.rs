@@ -130,27 +130,11 @@ impl<K: serde::Serialize, V: serde::Serialize> serde::Serialize for AsMap<'_, K,
     }
 }
 
-struct AsSeq<'a, K, V>(&'a LinearMap<K, V>);
-
-impl<K: serde::Serialize, V: serde::Serialize> serde::Serialize for AsSeq<'_, K, V> {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        super::linear_map::linear_map_to_seq(self.0, s)
-    }
-}
-
 #[derive(serde::Deserialize)]
 #[serde(bound(deserialize = "K: serde::Deserialize<'de>, V: serde::Deserialize<'de>"))]
 struct RawMap<K, V> {
     max_size: usize,
     #[serde(deserialize_with = "super::linear_map::linear_map_from_map")]
-    inner: LinearMap<K, V>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(bound(deserialize = "K: serde::Deserialize<'de>, V: serde::Deserialize<'de>"))]
-struct RawSeq<K, V> {
-    max_size: usize,
-    #[serde(deserialize_with = "super::linear_map::linear_map_from_seq")]
     inner: LinearMap<K, V>,
 }
 
@@ -179,17 +163,6 @@ pub fn bounded_map_to_map<K: serde::Serialize, V: serde::Serialize, S: serde::Se
     st.end()
 }
 
-pub fn bounded_map_to_seq<K: serde::Serialize, V: serde::Serialize, S: serde::Serializer>(
-    m: &BoundedMap<K, V>,
-    s: S,
-) -> Result<S::Ok, S::Error> {
-    use serde::ser::SerializeStruct;
-    let mut st = s.serialize_struct("BoundedMap", 2)?;
-    st.serialize_field("max_size", &m.max_size)?;
-    st.serialize_field("inner", &AsSeq(&m.inner))?;
-    st.end()
-}
-
 pub fn bounded_map_from_map<'de, K, V, D>(d: D) -> Result<BoundedMap<K, V>, D::Error>
 where
     K: serde::Deserialize<'de>,
@@ -197,15 +170,5 @@ where
     D: serde::Deserializer<'de>,
 {
     let raw = <RawMap<K, V> as serde::Deserialize>::deserialize(d)?;
-    build(raw.max_size, raw.inner)
-}
-
-pub fn bounded_map_from_seq<'de, K, V, D>(d: D) -> Result<BoundedMap<K, V>, D::Error>
-where
-    K: serde::Deserialize<'de>,
-    V: serde::Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    let raw = <RawSeq<K, V> as serde::Deserialize>::deserialize(d)?;
     build(raw.max_size, raw.inner)
 }

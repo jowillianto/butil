@@ -183,13 +183,6 @@ pub fn linear_map_to_map<K: serde::Serialize, V: serde::Serialize, S: serde::Ser
     s.collect_map(m.iter())
 }
 
-pub fn linear_map_to_seq<K: serde::Serialize, V: serde::Serialize, S: serde::Serializer>(
-    m: &LinearMap<K, V>,
-    s: S,
-) -> Result<S::Ok, S::Error> {
-    s.collect_seq(m.iter().map(|(_, v)| v))
-}
-
 struct MapVisitor<K, V>(std::marker::PhantomData<(K, V)>);
 
 impl<'de, K: serde::Deserialize<'de>, V: serde::Deserialize<'de>> serde::de::Visitor<'de>
@@ -210,26 +203,6 @@ impl<'de, K: serde::Deserialize<'de>, V: serde::Deserialize<'de>> serde::de::Vis
     }
 }
 
-struct SeqVisitor<K, V>(std::marker::PhantomData<(K, V)>);
-
-impl<'de, K: serde::Deserialize<'de>, V: serde::Deserialize<'de>> serde::de::Visitor<'de>
-    for SeqVisitor<K, V>
-{
-    type Value = LinearMap<K, V>;
-
-    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a sequence of key value pairs")
-    }
-
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
-        let mut m = LinearMap::new_with_capacity(a.size_hint().unwrap_or(0));
-        while let Some((k, v)) = a.next_element::<(K, V)>()? {
-            m.insert_no_check(k, v);
-        }
-        Ok(m)
-    }
-}
-
 pub fn linear_map_from_map<'de, K, V, D>(d: D) -> Result<LinearMap<K, V>, D::Error>
 where
     K: serde::Deserialize<'de>,
@@ -237,13 +210,4 @@ where
     D: serde::Deserializer<'de>,
 {
     d.deserialize_map(MapVisitor(std::marker::PhantomData))
-}
-
-pub fn linear_map_from_seq<'de, K, V, D>(d: D) -> Result<LinearMap<K, V>, D::Error>
-where
-    K: serde::Deserialize<'de>,
-    V: serde::Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    d.deserialize_seq(SeqVisitor(std::marker::PhantomData))
 }
