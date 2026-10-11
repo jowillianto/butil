@@ -187,7 +187,7 @@ pub fn linear_map_to_seq<K: serde::Serialize, V: serde::Serialize, S: serde::Ser
     m: &LinearMap<K, V>,
     s: S,
 ) -> Result<S::Ok, S::Error> {
-    s.collect_seq(m.iter())
+    s.collect_seq(m.iter().map(|(_, v)| v))
 }
 
 struct MapVisitor<K, V>(std::marker::PhantomData<(K, V)>);
