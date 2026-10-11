@@ -1,5 +1,5 @@
 pub struct LocalStorage {
-    root: std::path::PathBuf,
+    pub root: std::path::PathBuf,
 }
 
 impl LocalStorage {
