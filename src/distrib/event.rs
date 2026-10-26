@@ -1,49 +1,41 @@
 use super::error::{BridgeError, BridgeErrorKind};
 use super::message;
-use super::prelude::{FromProto, GetChannelName, InstanceId, ToProto};
+use super::prelude::{GetChannelName, InstanceId, ToProto};
 use crate::actor::serialized;
 use prost::Message;
 use redis::AsyncTypedCommands;
 
-pub struct ResourceInner<
-    K: 'static + Send + Sync + redis::ToSingleRedisArg,
-    C: 'static + Send + Sync + GetChannelName,
-> {
-    resource_key: K,
-    instance_id: InstanceId,
-    namer: C,
-    conn: redis::aio::ConnectionManager,
+pub enum RegistryEvent<Req, Res> {
+    Own {
+        key: Vec<u8>,
+        tx: tokio::sync::oneshot::Sender<Result<(), BridgeError>>,
+    },
+    Release {
+        key: Vec<u8>,
+    },
+    Req {
+        key: Vec<u8>,
+        req: Req,
+        tx: tokio::sync::oneshot::Sender<Result<Res, BridgeError>>,
+    },
+    Refresh,
 }
 
-pub struct Resource<
-    K: 'static + Send + Sync + redis::ToSingleRedisArg,
-    C: 'static + Send + Sync + GetChannelName,
-> {
-    inner: Option<ResourceInner<K, C>>,
+pub struct ResourceOwner<Req: 'static + Send, Res: 'static + Send> {
+    key: Vec<u8>,
+    registry: tokio::sync::mpsc::Sender<RegistryEvent<Req, Res>>,
 }
 
-impl<
-    K: 'static + Send + Sync + redis::ToSingleRedisArg,
-    C: 'static + Send + Sync + GetChannelName,
-> Drop for Resource<K, C>
-{
+impl<Req: 'static + Send, Res: 'static + Send> Drop for ResourceOwner<Req, Res> {
     fn drop(&mut self) {
-        if let Some(ResourceInner {
-            resource_key,
-            instance_id,
-            namer,
-            mut conn,
-        }) = self.inner.take()
+        let release = RegistryEvent::Release {
+            key: std::mem::take(&mut self.key),
+        };
+        if let Err(tokio::sync::mpsc::error::TrySendError::Full(release)) =
+            self.registry.try_send(release)
         {
-            tokio::spawn(async move {
-                conn.del_ex(
-                    namer.get_owner_key(resource_key),
-                    redis::ValueComparison::ifdeq(redis::calculate_value_digest(
-                        instance_id.to_proto().encode_to_vec(),
-                    )),
-                )
-                .await
-            });
+            let registry = self.registry.clone();
+            tokio::spawn(async move { registry.send(release).await });
         }
     }
 }
@@ -87,10 +79,10 @@ impl<Req, Res> serialized::GetId for message::InstanceMessage<Req, Res> {
 }
 
 pub struct InstanceRequest<Req, Res> {
-    to_instance_id: uuid::Uuid,
-    from_instance_id: uuid::Uuid,
-    inner: Req,
-    _res: std::marker::PhantomData<Res>,
+    pub to_instance_id: uuid::Uuid,
+    pub from_instance_id: uuid::Uuid,
+    pub inner: Req,
+    pub _res: std::marker::PhantomData<Res>,
 }
 
 impl<Req, Res> serialized::ToSerializable for InstanceRequest<Req, Res> {
@@ -105,49 +97,58 @@ impl<Req, Res> serialized::ToSerializable for InstanceRequest<Req, Res> {
     }
 }
 
-pub struct InstanceBridgeMailbox<Req, Res, C: GetChannelName> {
+pub struct InstanceBridgeMailbox<Req: 'static + Send, Res: 'static + Send, C: GetChannelName> {
     pub namer: C,
-    pub instance_id: InstanceId,
-    pub conn: redis::aio::ConnectionManager,
-    pub mbox: serialized::Mailbox<
-        u64,
-        message::InstanceMessage<Req, Res>,
-        message::InstanceMessage<Req, Res>,
-        serialized::Uint64Gen,
-        redis::RedisError,
-    >,
+    pub registry: tokio::sync::mpsc::Sender<RegistryEvent<Req, Res>>,
 }
 
-impl<Req, Res, C: GetChannelName> Clone for InstanceBridgeMailbox<Req, Res, C> {
+impl<Req: 'static + Send, Res: 'static + Send, C: GetChannelName> Clone
+    for InstanceBridgeMailbox<Req, Res, C>
+{
     fn clone(&self) -> Self {
         Self {
             namer: self.namer.clone(),
-            instance_id: self.instance_id,
-            conn: self.conn.clone(),
-            mbox: self.mbox.clone(),
+            registry: self.registry.clone(),
         }
     }
 }
 
-impl<Req, Res, C: 'static + Send + Sync + GetChannelName> InstanceBridgeMailbox<Req, Res, C> {
-    pub async fn own<K: 'static + Send + Sync + redis::ToSingleRedisArg + Clone>(
+impl<Req: 'static + Send, Res: 'static + Send, C: GetChannelName>
+    InstanceBridgeMailbox<Req, Res, C>
+{
+    pub async fn own<K: Send + Sync + redis::ToSingleRedisArg>(
         &self,
         k: K,
-    ) -> Result<Resource<K, C>, redis::RedisError> {
-        let mut conn = self.conn.clone();
-        conn.set(
-            self.namer.get_owner_key(k.clone()),
-            self.instance_id.to_proto().encode_to_vec(),
-        )
-        .await?;
-        Ok(Resource {
-            inner: Some(ResourceInner {
-                resource_key: k,
-                instance_id: self.instance_id,
-                namer: self.namer.clone(),
-                conn,
+    ) -> Result<ResourceOwner<Req, Res>, BridgeError> {
+        let key = redis::ToRedisArgs::to_redis_args(&self.namer.get_owner_key(k)).concat();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self
+            .registry
+            .send(RegistryEvent::Own {
+                key: key.clone(),
+                tx,
+            })
+            .await
+            .is_err()
+        {
+            return Err(BridgeError::new(
+                BridgeErrorKind::Local,
+                "bridge closed",
+                "the registry actor is no longer running",
+            ));
+        }
+        match rx.await {
+            Ok(Ok(())) => Ok(ResourceOwner {
+                key,
+                registry: self.registry.clone(),
             }),
-        })
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(BridgeError::new(
+                BridgeErrorKind::Local,
+                "bridge closed",
+                "the registry actor dropped the claim",
+            )),
+        }
     }
     pub async fn req<K: Send + Sync + redis::ToSingleRedisArg>(
         &self,
@@ -155,70 +156,39 @@ impl<Req, Res, C: 'static + Send + Sync + GetChannelName> InstanceBridgeMailbox<
         req: Req,
         timeout: Option<tokio::time::Duration>,
     ) -> Result<Res, BridgeError> {
-        let mut conn = self.conn.clone();
-        let owner = match redis::AsyncCommands::get::<_, redis::Value>(
-            &mut conn,
-            self.namer.get_owner_key(k),
-        )
-        .await
+        let key = redis::ToRedisArgs::to_redis_args(&self.namer.get_owner_key(k)).concat();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self
+            .registry
+            .send(RegistryEvent::Req { key, req, tx })
+            .await
+            .is_err()
         {
-            Ok(owner) => uuid::Uuid::from_proto(message::Uuid::try_from(owner)?),
-            Err(e) => {
-                return Err(BridgeError::new(
-                    BridgeErrorKind::Redis,
-                    "owner lookup failed",
-                    e.to_string(),
-                ));
-            }
-        };
-        let instance_req = InstanceRequest {
-            to_instance_id: owner,
-            from_instance_id: *self.instance_id,
-            inner: req,
-            _res: std::marker::PhantomData,
-        };
+            return Err(BridgeError::new(
+                BridgeErrorKind::Local,
+                "bridge closed",
+                "the registry actor is no longer running",
+            ));
+        }
         let res = match timeout {
-            Some(timeout) => self.mbox.req_with_timeout(instance_req, timeout).await,
-            None => self.mbox.req(instance_req).await,
+            Some(timeout) => match tokio::time::timeout(timeout, rx).await {
+                Ok(res) => res,
+                Err(_) => {
+                    return Err(BridgeError::new(
+                        BridgeErrorKind::Timeout,
+                        "request timed out",
+                        "no reply arrived in time",
+                    ));
+                }
+            },
+            None => rx.await,
         };
-        let res = match res {
+        match res {
             Ok(res) => res,
-            Err(serialized::Error::Timeout) => {
-                return Err(BridgeError::new(
-                    BridgeErrorKind::Timeout,
-                    "request timed out",
-                    "no reply arrived in time",
-                ));
-            }
-            Err(serialized::Error::Drop) => {
-                return Err(BridgeError::new(
-                    BridgeErrorKind::Local,
-                    "request dropped",
-                    "the pending request was dropped before a reply arrived",
-                ));
-            }
-            Err(serialized::Error::Closed) => {
-                return Err(BridgeError::new(
-                    BridgeErrorKind::Local,
-                    "bridge closed",
-                    "the pairing actor is no longer running",
-                ));
-            }
-            Err(serialized::Error::Send(e)) => {
-                return Err(BridgeError::new(
-                    BridgeErrorKind::Redis,
-                    "send failed",
-                    e.to_string(),
-                ));
-            }
-        };
-        match res.inner {
-            Some(message::instance_message::Inner::Res { inner }) => Ok(inner),
-            Some(message::instance_message::Inner::Error { inner }) => Err(inner),
-            Some(message::instance_message::Inner::Req { .. }) | None => Err(BridgeError::new(
-                BridgeErrorKind::Unknown,
-                "unexpected reply",
-                "the reply carried no response",
+            Err(_) => Err(BridgeError::new(
+                BridgeErrorKind::Local,
+                "request dropped",
+                "the request was dropped before a reply arrived",
             )),
         }
     }

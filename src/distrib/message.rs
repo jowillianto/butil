@@ -64,9 +64,15 @@ pub mod instance_message {
 
     #[derive(Clone)]
     pub enum Inner<Req, Res> {
-        Req { inner: Req },
-        Res { inner: Res },
-        Error { inner: super::super::error::BridgeError },
+        Req {
+            inner: Req,
+        },
+        Res {
+            inner: Res,
+        },
+        Error {
+            inner: super::super::error::BridgeError,
+        },
     }
 }
 
@@ -136,11 +142,9 @@ impl<
                 instance_message::ProtoInner::Res(v) => instance_message::Inner::Res {
                     inner: Res::from_proto(v),
                 },
-                instance_message::ProtoInner::Error(v) => {
-                    instance_message::Inner::Error {
-                        inner: super::error::BridgeError::from_proto(v),
-                    }
-                }
+                instance_message::ProtoInner::Error(v) => instance_message::Inner::Error {
+                    inner: super::error::BridgeError::from_proto(v),
+                },
             }),
         }
     }

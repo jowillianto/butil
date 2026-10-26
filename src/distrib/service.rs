@@ -1,13 +1,16 @@
-use super::ctx::RedisSubCtx;
-use super::event::{InstanceBridgeMailbox, RedisSender};
+use super::ctx::{RedisSubCtx, RegistryCtx};
+use super::error::BridgeError;
+use super::event::{InstanceBridgeMailbox, RedisSender, RegistryEvent};
 use super::message;
 use super::prelude::{FromProto, GetChannelName, InstanceId, OnRequest, ToProto};
 use crate::actor::prelude::{ActorCtl, GetMailbox};
 use crate::actor::{ActorArg, ActorStatus, ActorStatusKind, ShutdownAction, serialized};
 
-pub struct InstanceService<Req, Res, C: GetChannelName> {
+pub struct InstanceService<Req: 'static + Send, Res: 'static + Send, C: GetChannelName> {
     worker: tokio::sync::Mutex<crate::async_utils::Worker<()>>,
     status: ActorStatus,
+    registry_worker: tokio::sync::Mutex<crate::async_utils::Worker<()>>,
+    _refresh: crate::async_utils::Worker<()>,
     pairing: serialized::Service<
         u64,
         message::InstanceMessage<Req, Res>,
@@ -25,7 +28,7 @@ impl<
     C: 'static + Send + Sync + GetChannelName,
 > InstanceService<Req, Res, C>
 {
-    pub async fn new<H: 'static + Send + Sync + OnRequest<Req, Res, E: 'static + Send + std::fmt::Display>>(
+    pub async fn new<H: 'static + Send + Sync + Clone + OnRequest<Req, Res, E = BridgeError>>(
         client: redis::Client,
         instance_id: InstanceId,
         namer: C,
@@ -34,6 +37,7 @@ impl<
         max_pending: usize,
         refresh_interval: tokio::time::Duration,
         handler_timeout: tokio::time::Duration,
+        ttl: tokio::time::Duration,
     ) -> Result<Self, redis::RedisError> {
         let conn = client.get_connection_manager().await?;
         let (mut sink, stream) = client.get_async_pubsub().await?.split();
@@ -54,6 +58,38 @@ impl<
             serialized::Uint64Gen::default(),
         );
         let mbox = pairing.get_mailbox();
+        let (registry_tx, registry_rx) = tokio::sync::mpsc::channel(queue_size);
+        let (registry_worker, _) = ActorArg {
+            shutdown_action: ShutdownAction::Drain,
+            ..Default::default()
+        }
+        .run_with_lifecycle(
+            RegistryCtx {
+                instance_id,
+                conn,
+                ttl,
+                handler: handler.clone(),
+                handler_timeout,
+                mbox: mbox.clone(),
+                owned: std::collections::HashSet::new(),
+            },
+            tokio_stream::wrappers::ReceiverStream::new(registry_rx),
+        );
+        let refresh_tx = registry_tx.clone();
+        let refresh = crate::async_utils::WorkerArg::new(async move |cancel_token| {
+            let mut interval =
+                tokio::time::interval((ttl / 3).max(tokio::time::Duration::from_millis(1)));
+            interval.tick().await;
+            while crate::async_utils::wait_or(interval.tick(), cancel_token.cancelled())
+                .await
+                .is_some()
+            {
+                if refresh_tx.send(RegistryEvent::Refresh).await.is_err() {
+                    break;
+                }
+            }
+        })
+        .spawn();
         let (worker, status) = ActorArg {
             shutdown_action: ShutdownAction::Drain,
             ..Default::default()
@@ -62,7 +98,7 @@ impl<
             RedisSubCtx {
                 instance_id,
                 sender,
-                mbox: mbox.clone(),
+                mbox,
                 handler,
                 handler_timeout,
             },
@@ -71,25 +107,27 @@ impl<
         Ok(Self {
             worker: tokio::sync::Mutex::new(worker),
             status,
+            registry_worker: tokio::sync::Mutex::new(registry_worker),
+            _refresh: refresh,
             pairing,
             mailbox: InstanceBridgeMailbox {
                 namer,
-                instance_id,
-                conn,
-                mbox,
+                registry: registry_tx,
             },
             _sink: sink,
         })
     }
 }
 
-impl<Req, Res, C: GetChannelName> InstanceService<Req, Res, C> {
+impl<Req: 'static + Send, Res: 'static + Send, C: GetChannelName> InstanceService<Req, Res, C> {
     pub fn mailbox(&self) -> InstanceBridgeMailbox<Req, Res, C> {
         self.mailbox.clone()
     }
 }
 
-impl<Req, Res, C: GetChannelName> GetMailbox for InstanceService<Req, Res, C> {
+impl<Req: 'static + Send, Res: 'static + Send, C: GetChannelName> GetMailbox
+    for InstanceService<Req, Res, C>
+{
     type M = InstanceBridgeMailbox<Req, Res, C>;
     fn get_mailbox(&self) -> Self::M {
         self.mailbox.clone()
@@ -106,10 +144,13 @@ impl<Req: 'static + Send, Res: 'static + Send, C: 'static + Send + Sync + GetCha
     async fn stop(&self) {
         self.status.stop();
         self.worker.lock().await.cancel();
+        self._refresh.cancel();
+        self.registry_worker.lock().await.cancel();
         self.pairing.stop().await;
     }
     async fn wait(&self) {
         self.worker.lock().await.wait().await;
+        self.registry_worker.lock().await.wait().await;
         self.pairing.wait().await;
     }
 }
