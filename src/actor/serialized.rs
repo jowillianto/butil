@@ -24,7 +24,7 @@ pub trait GetId {
 }
 pub trait ToSerializable {
     type S: GetId;
-    fn to_serializable(&self, id: &<Self::S as GetId>::Id) -> Self::S;
+    fn to_serializable(self, id: &<Self::S as GetId>::Id) -> Self::S;
 }
 
 pub trait SendSerialized<S> {

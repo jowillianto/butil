@@ -17,12 +17,12 @@ impl<K, V> LinearMap<K, V> {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-    pub fn insert(&mut self, k: impl Into<K> + PartialEq<K>, v: impl Into<V>) -> bool {
-        if self.inner.iter().any(|(key, _)| k.eq(key)) {
-            return false;
+    pub fn insert(&mut self, k: impl Into<K> + PartialEq<K>, v: impl Into<V>) -> &mut V {
+        if let Some(id) = self.inner.iter().position(|(key, _)| k.eq(key)) {
+            self.inner[id].1 = v.into();
+            return &mut self.inner[id].1;
         }
-        self.inner.push((k.into(), v.into()));
-        true
+        self.insert_no_check(k, v)
     }
     pub fn filter_self(&mut self, f: impl FnMut(&(K, V)) -> bool) {
         self.inner = std::mem::take::<Vec<(K, V)>>(&mut self.inner)
@@ -57,6 +57,12 @@ impl<K, V> LinearMap<K, V> {
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut K, &mut V)> {
         self.inner.iter_mut().map(|(key, value)| (key, value))
+    }
+    pub fn iter_vals(&self) -> impl Iterator<Item = &V> {
+        self.inner.iter().map(|(_, value)| value)
+    }
+    pub fn iter_vals_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.inner.iter_mut().map(|(_, value)| value)
     }
     pub fn iter_keys(&self) -> impl Iterator<Item = &K> {
         self.inner.iter().map(|(key, _)| key)
