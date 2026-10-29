@@ -3,7 +3,7 @@ use std::sync::Arc;
 use object_store::ObjectStoreExt;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
-use super::storage_config::{Fs, FsError, FsErrorKind, LocalFile};
+use super::storage_config::{DirEntry, Fs, FsError, FsErrorKind, LocalFile};
 
 impl From<object_store::Error> for FsError {
     fn from(e: object_store::Error) -> Self {
@@ -138,6 +138,26 @@ impl Fs for ObjectStoreFs {
             local: staged.local.take(),
             remote,
         }))
+    }
+    async fn list(&self, path: &str) -> Result<Vec<DirEntry>, FsError> {
+        let res = self
+            .handle
+            .list_with_delimiter(Some(&self.remote_path(path)))
+            .await?;
+        Ok(res
+            .common_prefixes
+            .into_iter()
+            .map(|p| DirEntry {
+                name: p.filename().unwrap_or_default().to_string(),
+                is_dir: true,
+                size: None,
+            })
+            .chain(res.objects.into_iter().map(|o| DirEntry {
+                name: o.location.filename().unwrap_or_default().to_string(),
+                is_dir: false,
+                size: Some(o.size),
+            }))
+            .collect())
     }
     fn get_subfs(&self, path: &str) -> Arc<dyn Fs> {
         Arc::new(ObjectStoreFs {

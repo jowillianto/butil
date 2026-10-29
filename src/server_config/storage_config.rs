@@ -68,7 +68,15 @@ pub trait Fs: Send + Sync {
         path: &str,
         truncate: bool,
     ) -> Result<Box<dyn LocalFile>, FsError>;
+    async fn list(&self, path: &str) -> Result<Vec<DirEntry>, FsError>;
     fn get_subfs(&self, path: &str) -> Arc<dyn Fs>;
+}
+
+#[derive(Debug)]
+pub struct DirEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: Option<u64>,
 }
 
 #[async_trait::async_trait]
@@ -153,6 +161,19 @@ impl Fs for LocalStorage {
             tokio::fs::File::create(&path).await?;
         }
         Ok(Box::new(LocalStorageFile { path }))
+    }
+    async fn list(&self, path: &str) -> Result<Vec<DirEntry>, FsError> {
+        let mut rd = tokio::fs::read_dir(self.root.join(path)).await?;
+        let mut entries = Vec::new();
+        while let Some(e) = rd.next_entry().await? {
+            let meta = e.metadata().await?;
+            entries.push(DirEntry {
+                name: e.file_name().to_string_lossy().into_owned(),
+                is_dir: meta.is_dir(),
+                size: meta.is_file().then(|| meta.len()),
+            });
+        }
+        Ok(entries)
     }
     fn get_subfs(&self, path: &str) -> Arc<dyn Fs> {
         Arc::new(LocalStorage {
