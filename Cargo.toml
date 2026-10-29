@@ -38,7 +38,12 @@ lettre = { version = "0.11.23", default-features = false, features = [
   "aws-lc-rs",
   "file-transport",
 ], optional = true }
-redis = { version = "1.8.0", features = ["tokio-comp", "aio", "connection-manager"], optional = true }
+redis = { version = "1.8.0", features = [
+  "tokio-comp",
+  "aio",
+  "connection-manager",
+], optional = true }
+object_store = { version = "0.13", features = ["aws"], optional = true }
 
 [features]
 default = []
@@ -55,12 +60,45 @@ actor = [
   "dep:uuid",
 ]
 server-config = [
+  "server-config-loader",
+  "server-config-db",
+  "server-config-fixture",
+  "server-config-mail",
+  "server-config-storage",
+  "server-config-aws",
+]
+server-config-loader = ["dep:serde", "dep:minijinja"]
+server-config-db = ["dep:serde", "dep:sea-orm"]
+server-config-fixture = [
+  "server-config-db",
+  "dep:toml",
+  "dep:async-trait",
+]
+server-config-mail = [
   "actor",
   "dep:serde",
   "dep:minijinja",
-  "dep:sea-orm",
   "dep:lettre",
-  "dep:toml",
   "tokio/fs",
 ]
-distrib = ["actor", "dep:redis", "dep:prost", "dep:uuid", "dep:tokio", "dep:tokio-stream"]
+server-config-storage = [
+  "dep:serde",
+  "dep:async-trait",
+  "dep:tokio",
+  "tokio/fs",
+  "tokio/io-util",
+]
+server-config-aws = [
+  "server-config-storage",
+  "dep:object_store",
+  "dep:uuid",
+  "tokio-util/io",
+]
+distrib = [
+  "actor",
+  "dep:redis",
+  "dep:prost",
+  "dep:uuid",
+  "dep:tokio",
+  "dep:tokio-stream",
+]

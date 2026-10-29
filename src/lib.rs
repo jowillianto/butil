@@ -6,5 +6,4 @@ pub mod async_utils;
 pub mod collections;
 #[cfg(feature = "distrib")]
 pub mod distrib;
-#[cfg(feature = "server-config")]
 pub mod server_config;
