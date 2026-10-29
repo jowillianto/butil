@@ -3,7 +3,7 @@ use std::sync::Arc;
 use object_store::ObjectStoreExt;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
-use super::storage_config::{Fs, FsError, FsErrorKind, LocalFile, SubFs};
+use super::storage_config::{Fs, FsError, FsErrorKind, LocalFile};
 
 impl From<object_store::Error> for FsError {
     fn from(e: object_store::Error) -> Self {
@@ -139,9 +139,6 @@ impl Fs for ObjectStoreFs {
             remote,
         }))
     }
-}
-
-impl SubFs for ObjectStoreFs {
     fn get_subfs(&self, path: &str) -> Arc<dyn Fs> {
         Arc::new(ObjectStoreFs {
             handle: self.handle.clone(),

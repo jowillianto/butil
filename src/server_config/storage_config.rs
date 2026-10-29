@@ -68,9 +68,6 @@ pub trait Fs: Send + Sync {
         path: &str,
         truncate: bool,
     ) -> Result<Box<dyn LocalFile>, FsError>;
-}
-
-pub trait SubFs {
     fn get_subfs(&self, path: &str) -> Arc<dyn Fs>;
 }
 
@@ -157,6 +154,11 @@ impl Fs for LocalStorage {
         }
         Ok(Box::new(LocalStorageFile { path }))
     }
+    fn get_subfs(&self, path: &str) -> Arc<dyn Fs> {
+        Arc::new(LocalStorage {
+            root: self.root.join(path),
+        })
+    }
 }
 
 pub struct LocalStorageFile {
@@ -170,14 +172,6 @@ impl LocalFile for LocalStorageFile {
     }
     async fn commit(self: Box<Self>) -> Result<(), FsError> {
         Ok(())
-    }
-}
-
-impl SubFs for LocalStorage {
-    fn get_subfs(&self, path: &str) -> Arc<dyn Fs> {
-        Arc::new(LocalStorage {
-            root: self.root.join(path),
-        })
     }
 }
 
